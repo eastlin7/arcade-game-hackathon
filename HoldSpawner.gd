@@ -42,7 +42,8 @@ func _process(_delta: float) -> void:
 	var cam_y := cam.global_position.y
 	var view_h := 648.0
 
-	var spawn_above := cam_y - 1.5 * view_h
+	# 2x margin: still covers the whole view when the camera zooms out to 0.67.
+	var spawn_above := cam_y - 2.0 * view_h
 	var free_below := cam_y + 1.0 * view_h
 
 	var top_r := int(ceil((FIRST_ROW_Y - spawn_above) / ROW_H))

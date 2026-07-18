@@ -18,6 +18,9 @@ const RIGHT_SHOULDER := Vector2(22.5, -28.5)
 
 const THROW_SPEED := 620.0
 
+# Coyote grab buffer: a missed press keeps retrying this long while held.
+const GRAB_BUFFER := 0.12
+
 # Per-side lock state.
 var left_locked := false
 var right_locked := false
@@ -31,57 +34,168 @@ var right_bottle: RigidBody2D = null
 # Cached input read on the main thread for _integrate_forces.
 var aim_dir := Vector2.ZERO
 
+# Remaining coyote-buffer time per hand.
+var left_grab_buffer := 0.0
+var right_grab_buffer := 0.0
+
+# Remaining stun time (bottle hit): hands forced open, no gripping allowed.
+var stun_time := 0.0
+
+# Currently highlighted (reachable) hold per hand.
+var _hl_left_hold: Node2D = null
+var _hl_right_hold: Node2D = null
+
 const GrabSplashScript := preload("res://GrabSplash.gd")
+const GrabWhiffScript := preload("res://GrabWhiff.gd")
+const HitTextScript := preload("res://HitText.gd")
+const RedTintShader := preload("res://red_tint.gdshader")
+
+# Hit effect: sprite flashes white and game slows for this many REAL seconds
+# (~2 frames' worth of impact at normal speed).
+const HIT_FREEZE := 0.09
+const HIT_TIME_SCALE := 0.1
+
+var _mat: ShaderMaterial
+
+# "p1" or "p2" — selects this player's InputMap action set (p1_move_up etc).
+@export var input_prefix := "p1"
+# Recolor the sprite red (player 2 identity).
+@export var red_tint := false
+
+# Cached action names, built from input_prefix in _ready.
+var _a_ml: String
+var _a_mr: String
+var _a_mu: String
+var _a_md: String
+var _a_gl: String
+var _a_gr: String
 
 @onready var left_arm: Node2D = $LeftArm
 @onready var right_arm: Node2D = $RightArm
 
 
-func _physics_process(_delta: float) -> void:
-	aim_dir = Input.get_vector("move_left", "move_right", "move_up", "move_down")
+func _ready() -> void:
+	_a_ml = input_prefix + "_move_left"
+	_a_mr = input_prefix + "_move_right"
+	_a_mu = input_prefix + "_move_up"
+	_a_md = input_prefix + "_move_down"
+	_a_gl = input_prefix + "_grab_left"
+	_a_gr = input_prefix + "_grab_right"
+	# Every player gets the shader (for the hit flash); only p2 gets the red mix.
+	_mat = ShaderMaterial.new()
+	_mat.shader = RedTintShader
+	_mat.set_shader_parameter("mix_amount", 0.8 if red_tint else 0.0)
+	for sprite: CanvasItem in [$BodySprite, $LeftArm/ArmSprite, $RightArm/ArmSprite]:
+		sprite.material = _mat
+
+
+func _physics_process(delta: float) -> void:
+	aim_dir = Input.get_vector(_a_ml, _a_mr, _a_mu, _a_md)
 
 	# Hold-to-lock: locked exactly while the key is held.
 	# A bottle in range wins over a hold; releasing a bottle-hand throws it.
-	if Input.is_action_just_pressed("grab_left"):
-		var hand := left_arm.to_global(Vector2(0, ARM_LEN))
-		var bottle := _find_bottle_near(hand)
-		if bottle != null:
-			left_bottle = bottle
-			bottle.pick_up()
-			_spawn_grab_splash(bottle.global_position)
+	# A missed press whiffs visibly and keeps retrying for GRAB_BUFFER seconds
+	# (coyote grab) while the key stays held. Stunned -> grabs blocked entirely.
+	stun_time = maxf(0.0, stun_time - delta)
+	if Input.is_action_just_pressed(_a_gl) and stun_time <= 0.0:
+		if _attempt_grab(true):
+			left_grab_buffer = 0.0
 		else:
-			var hold := _find_hold_near(hand)
-			if hold != null:
-				left_locked = true
-				left_anchor = hold.global_position
-				_spawn_grab_splash(left_anchor)
-	if Input.is_action_just_released("grab_left"):
+			left_grab_buffer = GRAB_BUFFER
+			_spawn_grab_whiff(left_arm.to_global(Vector2(0, ARM_LEN)))
+	elif left_grab_buffer > 0.0 and Input.is_action_pressed(_a_gl) and stun_time <= 0.0:
+		if _attempt_grab(true):
+			left_grab_buffer = 0.0
+	if Input.is_action_just_released(_a_gl):
+		left_grab_buffer = 0.0
 		left_locked = false
 		if left_bottle != null:
 			_throw_bottle(left_bottle, left_arm)
 			left_bottle = null
 
-	if Input.is_action_just_pressed("grab_right"):
-		var hand := right_arm.to_global(Vector2(0, ARM_LEN))
-		var bottle := _find_bottle_near(hand)
-		if bottle != null:
-			right_bottle = bottle
-			bottle.pick_up()
-			_spawn_grab_splash(bottle.global_position)
+	if Input.is_action_just_pressed(_a_gr) and stun_time <= 0.0:
+		if _attempt_grab(false):
+			right_grab_buffer = 0.0
 		else:
-			var hold := _find_hold_near(hand)
-			if hold != null:
-				right_locked = true
-				right_anchor = hold.global_position
-				_spawn_grab_splash(right_anchor)
-	if Input.is_action_just_released("grab_right"):
+			right_grab_buffer = GRAB_BUFFER
+			_spawn_grab_whiff(right_arm.to_global(Vector2(0, ARM_LEN)))
+	elif right_grab_buffer > 0.0 and Input.is_action_pressed(_a_gr) and stun_time <= 0.0:
+		if _attempt_grab(false):
+			right_grab_buffer = 0.0
+	if Input.is_action_just_released(_a_gr):
+		right_grab_buffer = 0.0
 		right_locked = false
 		if right_bottle != null:
 			_throw_bottle(right_bottle, right_arm)
 			right_bottle = null
 
+	left_grab_buffer = maxf(0.0, left_grab_buffer - delta)
+	right_grab_buffer = maxf(0.0, right_grab_buffer - delta)
+
 	# While gripping, the climber holds on: no gravity sag, movement is steered.
 	gravity_scale = 0.0 if (left_locked or right_locked) else 1.0
+
+
+# Bottle hit: hands fly open and can't grip for `duration`. Carried bottles drop.
+func stun(duration: float) -> void:
+	stun_time = maxf(stun_time, duration)
+	left_locked = false
+	right_locked = false
+	left_grab_buffer = 0.0
+	right_grab_buffer = 0.0
+	if left_bottle != null:
+		_drop_bottle(left_bottle, left_arm)
+		left_bottle = null
+	if right_bottle != null:
+		_drop_bottle(right_bottle, right_arm)
+		right_bottle = null
+	_hit_effect()
+	# Cartoony hit text above the head.
+	var hit_text := Node2D.new()
+	hit_text.set_script(HitTextScript)
+	hit_text.global_position = global_position + Vector2(randf_range(-12.0, 12.0), -95.0)
+	get_parent().add_child(hit_text)
+
+
+# White flash + brief global slow-mo on impact. Timer runs on real time, so
+# the restore isn't itself slowed by the reduced time scale.
+func _hit_effect() -> void:
+	_mat.set_shader_parameter("flash", 1.0)
+	Engine.time_scale = HIT_TIME_SCALE
+	await get_tree().create_timer(HIT_FREEZE, true, false, true).timeout
+	Engine.time_scale = 1.0
+	_mat.set_shader_parameter("flash", 0.0)
+
+
+func _drop_bottle(bottle: RigidBody2D, arm: Node2D) -> void:
+	bottle.add_collision_exception_with(self)
+	bottle.throw(arm.to_global(Vector2(0, ARM_LEN)), linear_velocity)
+
+
+# Try to grab with one hand: bottle wins over hold. Returns success.
+func _attempt_grab(is_left: bool) -> bool:
+	var arm := left_arm if is_left else right_arm
+	var hand := arm.to_global(Vector2(0, ARM_LEN))
+	var bottle := _find_bottle_near(hand)
+	if bottle != null:
+		if is_left:
+			left_bottle = bottle
+		else:
+			right_bottle = bottle
+		bottle.pick_up()
+		_spawn_grab_splash(bottle.global_position)
+		return true
+	var hold := _find_hold_near(hand)
+	if hold != null:
+		if is_left:
+			left_locked = true
+			left_anchor = hold.global_position
+		else:
+			right_locked = true
+			right_anchor = hold.global_position
+		_spawn_grab_splash(hold.global_position)
+		return true
+	return false
 
 
 # Nearest climbing hold within grab range of the hand tip, or null.
@@ -129,11 +243,39 @@ func _spawn_grab_splash(pos: Vector2) -> void:
 	get_parent().add_child(splash)
 
 
+func _spawn_grab_whiff(pos: Vector2) -> void:
+	var whiff := Node2D.new()
+	whiff.set_script(GrabWhiffScript)
+	whiff.global_position = pos
+	get_parent().add_child(whiff)
+
+
 func _process(delta: float) -> void:
 	_update_arm(left_arm, left_locked, left_anchor, LEFT_SHOULDER, true, delta)
 	_update_arm(right_arm, right_locked, right_anchor, RIGHT_SHOULDER, false, delta)
 	_carry_bottle(left_bottle, left_arm)
 	_carry_bottle(right_bottle, right_arm)
+	_hl_left_hold = _update_highlight(_hl_left_hold, left_arm, left_locked or left_bottle != null or stun_time > 0.0, true)
+	_hl_right_hold = _update_highlight(_hl_right_hold, right_arm, right_locked or right_bottle != null or stun_time > 0.0, false)
+	# Stun feedback: fast red blink until control returns.
+	if stun_time > 0.0:
+		modulate = Color(1.0, 0.45, 0.45) if fmod(stun_time, 0.2) < 0.1 else Color.WHITE
+	elif modulate != Color.WHITE:
+		modulate = Color.WHITE
+
+
+# Highlight the hold this hand would grab right now; clear the previous one.
+func _update_highlight(prev: Node2D, arm: Node2D, hand_busy: bool, is_left: bool) -> Node2D:
+	var next: Node2D = null
+	if not hand_busy:
+		next = _find_hold_near(arm.to_global(Vector2(0, ARM_LEN)))
+	if next == prev:
+		return prev
+	if prev != null and is_instance_valid(prev):
+		prev.set_highlight(is_left, false)
+	if next != null:
+		next.set_highlight(is_left, true)
+	return next
 
 
 func _carry_bottle(bottle: RigidBody2D, arm: Node2D) -> void:

@@ -8,8 +8,13 @@ const BOTTLE_COLORS := [
 	Color(0.35, 0.5, 0.65),   # blue glass
 ]
 
+const STUN_DURATION := 2.0
+
 var carried := false
+var _armed := false  # true while in flight after a throw — only then it stuns
 var _glass: Color = BOTTLE_COLORS[0]
+
+const GrabSplashScript := preload("res://GrabSplash.gd")
 
 
 @onready var _shape: CollisionShape2D = $CollisionShape2D
@@ -22,7 +27,25 @@ func _ready() -> void:
 	# so a pinned bottle never body-blocks a climbing player.
 	_shape.set_deferred("disabled", true)
 	_glass = BOTTLE_COLORS[randi() % BOTTLE_COLORS.size()]
+	contact_monitor = true
+	max_contacts_reported = 4
+	body_entered.connect(_on_body_entered)
 	queue_redraw()
+
+
+func _on_body_entered(body: Node) -> void:
+	if not _armed:
+		return
+	if body.has_method("stun"):
+		body.stun(STUN_DURATION)
+		_shatter()
+
+
+func _shatter() -> void:
+	var dust: CPUParticles2D = GrabSplashScript.new()
+	dust.global_position = global_position
+	get_parent().add_child(dust)
+	queue_free()
 
 
 func pick_up() -> void:
@@ -33,6 +56,7 @@ func pick_up() -> void:
 
 func throw(from: Vector2, velocity: Vector2) -> void:
 	carried = false
+	_armed = true
 	global_position = from
 	freeze = false
 	_shape.set_deferred("disabled", false)

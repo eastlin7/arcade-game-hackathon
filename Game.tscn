@@ -4,6 +4,7 @@
 [ext_resource type="PackedScene" path="res://Player.tscn" id="2_player"]
 [ext_resource type="Script" path="res://HoldSpawner.gd" id="3_spawner"]
 [ext_resource type="Script" path="res://WallBackground.gd" id="4_wall"]
+[ext_resource type="Script" path="res://HeightHud.gd" id="5_hud"]
 
 [sub_resource type="RectangleShape2D" id="RectangleShape2D_floor"]
 size = Vector2(4000, 48)
@@ -41,6 +42,12 @@ script = ExtResource("3_spawner")
 
 [node name="Player" parent="." instance=ExtResource("2_player")]
 position = Vector2(300, 514)
+input_prefix = "p1"
+
+[node name="Player2" parent="." instance=ExtResource("2_player")]
+position = Vector2(850, 514)
+input_prefix = "p2"
+red_tint = true
 
 [node name="Camera" type="Camera2D" parent="."]
 position = Vector2(576, 324)
@@ -50,3 +57,22 @@ limit_right = 1152
 limit_bottom = 648
 position_smoothing_enabled = true
 position_smoothing_speed = 5.0
+
+[node name="HudLayer" type="CanvasLayer" parent="."]
+layer = 10
+
+[node name="HeightHud" type="Control" parent="HudLayer"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+mouse_filter = 2
+script = ExtResource("5_hud")
+
+[node name="HeightHud2" type="Control" parent="HudLayer"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+mouse_filter = 2
+script = ExtResource("5_hud")
+right_side = true
+fill = Color(1, 0.35, 0.3, 1)
