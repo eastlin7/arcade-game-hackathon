@@ -11,6 +11,7 @@ extends Node2D
 func _ready() -> void:
 	height_hud.setup(player)
 	height_hud2.setup(player2)
+	$EventManager.setup([player, player2])
 
 
 # Camera zoom: 1.0 when players are close, eases out to ZOOM_FAR (shows ~50%
@@ -20,6 +21,16 @@ const ZOOM_FAR := 0.67
 const SEP_NEAR := 350.0
 const SEP_FAR := 850.0
 const ZOOM_SPEED := 3.0
+
+# Screen shake: decaying random camera offset, in real time so the hitstop
+# slow-mo doesn't stretch it.
+const SHAKE_DECAY := 22.0
+
+var _shake := 0.0
+
+
+func add_shake(amount: float) -> void:
+	_shake = maxf(_shake, amount)
 
 
 func _process(delta: float) -> void:
@@ -33,6 +44,14 @@ func _process(delta: float) -> void:
 	var target_zoom := lerpf(ZOOM_NEAR, ZOOM_FAR, t)
 	var z := lerpf(camera.zoom.x, target_zoom, minf(ZOOM_SPEED * delta, 1.0))
 	camera.zoom = Vector2(z, z)
+
+	# Shake rides on the camera offset so position/limits stay untouched.
+	if _shake > 0.01:
+		var real_delta := delta / maxf(Engine.time_scale, 0.001)
+		camera.offset = Vector2(randf_range(-1.0, 1.0), randf_range(-1.0, 1.0)) * _shake
+		_shake = maxf(0.0, _shake - SHAKE_DECAY * real_delta * maxf(_shake / 6.0, 0.5))
+	elif camera.offset != Vector2.ZERO:
+		camera.offset = Vector2.ZERO
 
 
 func _unhandled_input(event: InputEvent) -> void:

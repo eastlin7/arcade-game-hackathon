@@ -150,6 +150,8 @@ func stun(duration: float) -> void:
 		_drop_bottle(right_bottle, right_arm)
 		right_bottle = null
 	_hit_effect()
+	if get_parent().has_method("add_shake"):
+		get_parent().add_shake(6.0)
 	# Cartoony hit text above the head.
 	var hit_text := Node2D.new()
 	hit_text.set_script(HitTextScript)
