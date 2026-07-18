@@ -1,0 +1,4 @@
+#!/bin/bash
+# macOS dev wrapper: runs the game .pck with the local Godot binary.
+# On the real cabinet this file is a genuine Linux export instead.
+exec "$HOME/Downloads/Godot.app/Contents/MacOS/Godot" "$@"

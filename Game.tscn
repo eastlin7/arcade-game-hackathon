@@ -1,0 +1,52 @@
+[gd_scene format=3 uid="uid://xny1sjv3gab5"]
+
+[ext_resource type="Script" path="res://Game.gd" id="1_game"]
+[ext_resource type="PackedScene" path="res://Player.tscn" id="2_player"]
+[ext_resource type="Script" path="res://HoldSpawner.gd" id="3_spawner"]
+[ext_resource type="Script" path="res://WallBackground.gd" id="4_wall"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_floor"]
+size = Vector2(4000, 48)
+
+[node name="Game" type="Node2D"]
+script = ExtResource("1_game")
+
+[node name="BackgroundLayer" type="CanvasLayer" parent="."]
+layer = -1
+
+[node name="Background" type="ColorRect" parent="BackgroundLayer"]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+color = Color(0.08, 0.09, 0.12, 1)
+
+[node name="WallBackground" type="Node2D" parent="."]
+script = ExtResource("4_wall")
+
+[node name="Floor" type="StaticBody2D" parent="."]
+position = Vector2(576, 624)
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Floor"]
+shape = SubResource("RectangleShape2D_floor")
+
+[node name="Visual" type="ColorRect" parent="Floor"]
+offset_left = -2000.0
+offset_top = -24.0
+offset_right = 2000.0
+offset_bottom = 24.0
+color = Color(0.22, 0.18, 0.15, 1)
+
+[node name="HoldSpawner" type="Node2D" parent="."]
+script = ExtResource("3_spawner")
+
+[node name="Player" parent="." instance=ExtResource("2_player")]
+position = Vector2(300, 514)
+
+[node name="Camera" type="Camera2D" parent="."]
+position = Vector2(576, 324)
+zoom = Vector2(1.0, 1.0)
+limit_left = 0
+limit_right = 1152
+limit_bottom = 648
+position_smoothing_enabled = true
+position_smoothing_speed = 5.0

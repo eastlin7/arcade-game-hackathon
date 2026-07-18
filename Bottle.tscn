@@ -1,0 +1,15 @@
+[gd_scene format=3 uid="uid://b0ttl3sc3n3a"]
+
+[ext_resource type="Script" path="res://Bottle.gd" id="1_bottle"]
+
+[sub_resource type="CapsuleShape2D" id="1"]
+radius = 7.0
+height = 44.0
+
+[node name="Bottle" type="RigidBody2D"]
+gravity_scale = 1.4
+script = ExtResource("1_bottle")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+position = Vector2(0, -3)
+shape = SubResource("1")
