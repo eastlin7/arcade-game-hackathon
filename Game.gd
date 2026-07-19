@@ -19,6 +19,10 @@ func _ready() -> void:
 	_win_screen = CanvasLayer.new()
 	_win_screen.set_script(WinScreenScript)
 	add_child(_win_screen)
+	var start_screen := CanvasLayer.new()
+	start_screen.set_script(preload("res://StartScreen.gd"))
+	add_child(start_screen)
+	start_screen.show_start()
 
 
 # Camera zoom: 1.0 when players are close, eases out to ZOOM_FAR as their
