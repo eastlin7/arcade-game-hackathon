@@ -55,7 +55,20 @@ var right_regrip := 0.0
 var _hl_left_hold: Node2D = null
 var _hl_right_hold: Node2D = null
 
+# Tether: auto-attach when the body gets within this range of a tether point.
+const TETHER_ATTACH_RADIUS := 60.0
+# While tethered, the body can never fall more than 1 m below the anchor.
+const TETHER_FLOOR_DROP := 100.0
+
+# Current tether point (null when untethered) and its frozen anchor position.
+var tether_point: Node2D = null
+var tether_anchor := Vector2.ZERO
+# Anchor constraint survives even if the point node is streamed out below.
+var tether_active := false
+var _tether_rope: Node2D = null
+
 const GrabSplashScript := preload("res://GrabSplash.gd")
+const TetherRopeScript := preload("res://TetherRope.gd")
 const GrabWhiffScript := preload("res://GrabWhiff.gd")
 const HitTextScript := preload("res://HitText.gd")
 const RedTintShader := preload("res://red_tint.gdshader")
@@ -100,6 +113,11 @@ func _ready() -> void:
 	# Needed so _integrate_forces can read floor contacts for ground walking.
 	contact_monitor = true
 	max_contacts_reported = 6
+	# Rope visual: child node drawing in world space (top_level in its _ready).
+	_tether_rope = Node2D.new()
+	_tether_rope.set_script(TetherRopeScript)
+	_tether_rope.player = self
+	add_child(_tether_rope)
 
 
 func _physics_process(delta: float) -> void:
@@ -166,6 +184,35 @@ func _maybe_lunge() -> void:
 		return
 	if aim_dir != Vector2.ZERO:
 		linear_velocity += aim_dir * LUNGE_SPEED
+
+	_update_tether()
+
+
+# Auto-attach to a nearby tether point; on a new attachment the old point is
+# ripped off the wall and falls away (a climber only ever has one safety line).
+func _update_tether() -> void:
+	if tether_point != null and not is_instance_valid(tether_point):
+		tether_point = null  # node streamed out; anchor + rope stay live
+	var best: Node2D = null
+	var best_d := TETHER_ATTACH_RADIUS
+	for tp: Node2D in get_tree().get_nodes_in_group("tether_points"):
+		if tp == tether_point:
+			continue
+		var d := tp.global_position.distance_to(global_position)
+		if d < best_d:
+			best_d = d
+			best = tp
+	if best == null:
+		return
+	if tether_point != null and is_instance_valid(tether_point):
+		tether_point.detach_and_fall()
+	tether_point = best
+	tether_anchor = best.global_position
+	tether_active = true
+	# Rope shoots out from the body to the ring (constraint is live immediately;
+	# only the visual animates — keeps it snappy).
+	_tether_rope.shoot_to(tether_anchor)
+	_spawn_grab_splash(tether_anchor)
 
 
 # Bottle hit: hands fly open and can't grip for `duration`. Carried bottles drop.
@@ -354,6 +401,15 @@ func _clamp_arm_angle(angle: float, is_left: bool) -> float:
 func _integrate_forces(state: PhysicsDirectBodyState2D) -> void:
 	_apply_arm_constraint(state, left_locked, left_anchor, LEFT_SHOULDER, true)
 	_apply_arm_constraint(state, right_locked, right_anchor, RIGHT_SHOULDER, false)
+
+	# Tether floor: free to climb up/sideways, but never drop more than 1 m
+	# below the anchor. Y-only clamp, downward velocity killed.
+	if tether_active:
+		var floor_y := tether_anchor.y + TETHER_FLOOR_DROP
+		if state.transform.origin.y > floor_y:
+			state.transform.origin.y = floor_y
+			if state.linear_velocity.y > 0.0:
+				state.linear_velocity.y = 0.0
 
 	# Rigid grip: velocity is steered, not force-pushed. No input -> hold still.
 	if left_locked or right_locked:
