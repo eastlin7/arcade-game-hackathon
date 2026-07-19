@@ -12,6 +12,8 @@ func _ready() -> void:
 	height_hud.setup(player)
 	height_hud2.setup(player2)
 	$EventManager.setup([player, player2])
+	player.opponent = player2
+	player2.opponent = player
 
 
 # Camera zoom: 1.0 when players are close, eases out to ZOOM_FAR (shows ~50%
