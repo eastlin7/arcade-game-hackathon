@@ -1,9 +1,21 @@
 extends RigidBody2D
 
-# Local distance from shoulder pivot to the hand's CENTER (not the sprite tip —
-# grabbing/pivoting happens mid-palm), world reach = local * 3x scale.
-const ARM_LEN := 17.0
-const ARM_REACH := 51.0
+# ---- Rig geometry (canvas px, rig-local; Rig node carries the 3x scale) ----
+# Bone vectors as drawn in the aseprite: pivot -> child joint. All pose math
+# derives lengths and rest angles from these, so the drawn pivots are the
+# single source of truth and joints can never separate (pure FK hierarchy).
+const L_UPPER := Vector2(-2.5, 10.0)   # left shoulder -> elbow
+const L_FORE := Vector2(-0.5, 10.5)    # left elbow -> hand
+const R_UPPER := Vector2(3.5, 10.0)
+const R_FORE := Vector2(0.0, 11.0)
+const L_LEG := Vector2(-3.0, 23.5)     # left hip -> foot
+const R_LEG := Vector2(2.0, 23.5)
+const RIG_SCALE := 3.0
+
+# Shoulder offsets in body-local WORLD px (rotation locked, tilt is cosmetic).
+const LEFT_SHOULDER := Vector2(-15.0, -36.0)
+const RIGHT_SHOULDER := Vector2(18.0, -36.0)
+
 const CLIMB_SPEED := 140.0  # steering speed while gripping (px/s)
 const CLIMB_ACCEL := 6.0    # how snappily velocity follows input while gripping
 const HANG_GRAVITY := 0.25  # partial gravity while gripping -> natural sag/swing
@@ -13,16 +25,18 @@ const ARM_TURN_SPEED := 12.0
 
 # Ground walking (only way to move without gripping).
 const WALK_SPEED := 160.0
-# Snap-assist range around the hand tip — deliberately larger than the hand
-# itself, so holds a bit beyond actual reach still catch; the arm constraint
-# then pulls the body toward the hold.
+# Snap-assist range around the hand — deliberately generous so holds a bit
+# beyond actual reach still catch; the arm constraint then pulls the body in.
 const GRAB_RADIUS := 55.0
 
-# Shoulder offsets in body-local space (rotation is locked, so no rotation math).
-const LEFT_SHOULDER := Vector2(-16.5, -28.5)
-const RIGHT_SHOULDER := Vector2(22.5, -28.5)
-
 const THROW_SPEED := 620.0
+
+# Body tilt (cosmetic lean of the whole rig) and leg dangle limits.
+const TILT_MAX := deg_to_rad(15.0)
+const TILT_SPEED := 6.0             # how fast the lean follows its target
+const LEG_MAX := deg_to_rad(30.0)   # dangle limit relative to the body
+const LEG_DAMP := 2.0               # pendulum damping per second
+const LEG_GROUND_SPRING := 14.0     # legs snap under the body when standing
 
 # Aim assist: throws bend toward the opponent when roughly aimed at them.
 const AIM_ASSIST_MAX_ANGLE := deg_to_rad(18.0)  # max correction applied
@@ -58,6 +72,20 @@ var stun_time := 0.0
 # Per-hand regrip cooldown (anti button-mash: alternate hands to climb fast).
 var left_regrip := 0.0
 var right_regrip := 0.0
+
+# Smoothed shoulder direction per arm (down=0 convention), lerped in _process.
+var _l_theta := 0.0
+var _r_theta := 0.0
+
+# Leg pendulum state: angle relative to the body (0 = as drawn) + angular vel.
+var _l_leg_a := 0.0
+var _l_leg_w := 0.0
+var _r_leg_a := 0.0
+var _r_leg_w := 0.0
+
+# Grounded flag mirrored out of _integrate_forces for the visual rig.
+var _grounded := false
+var _prev_vx := 0.0
 
 # Currently highlighted (reachable) hold per hand.
 var _hl_left_hold: Node2D = null
@@ -106,8 +134,19 @@ var _a_md: String
 var _a_gl: String
 var _a_gr: String
 
-@onready var left_arm: Node2D = $LeftArm
-@onready var right_arm: Node2D = $RightArm
+@onready var _rig: Node2D = $Rig
+@onready var left_arm: Node2D = $Rig/LeftArm
+@onready var right_arm: Node2D = $Rig/RightArm
+@onready var left_forearm: Node2D = $Rig/LeftArm/LeftForearm
+@onready var right_forearm: Node2D = $Rig/RightArm/RightForearm
+@onready var left_hand: Node2D = $Rig/LeftArm/LeftForearm/LeftHand
+@onready var right_hand: Node2D = $Rig/RightArm/RightForearm/RightHand
+@onready var left_leg: Node2D = $Rig/LeftLeg
+@onready var right_leg: Node2D = $Rig/RightLeg
+
+# Max shoulder->hand reach in world px, per side (arm fully straight).
+var _reach_l := (L_UPPER.length() + L_FORE.length()) * RIG_SCALE
+var _reach_r := (R_UPPER.length() + R_FORE.length()) * RIG_SCALE
 
 
 func _ready() -> void:
@@ -121,7 +160,12 @@ func _ready() -> void:
 	_mat = ShaderMaterial.new()
 	_mat.shader = RedTintShader
 	_mat.set_shader_parameter("mix_amount", 0.8 if red_tint else 0.0)
-	for sprite: CanvasItem in [$BodySprite, $LeftArm/ArmSprite, $RightArm/ArmSprite]:
+	for sprite: CanvasItem in [
+		$Rig/BodySprite,
+		$Rig/LeftArm/ArmSprite, $Rig/RightArm/ArmSprite,
+		$Rig/LeftArm/LeftForearm/ForearmSprite, $Rig/RightArm/RightForearm/ForearmSprite,
+		$Rig/LeftLeg/LegSprite, $Rig/RightLeg/LegSprite,
+	]:
 		sprite.material = _mat
 	# Needed so _integrate_forces can read floor contacts for ground walking.
 	contact_monitor = true
@@ -133,6 +177,10 @@ func _ready() -> void:
 	add_child(_tether_rope)
 	# First child -> draws under the body/arm sprites but above the background.
 	move_child(_tether_rope, 0)
+
+
+func _hand_pos(is_left: bool) -> Vector2:
+	return (left_hand if is_left else right_hand).global_position
 
 
 func _physics_process(delta: float) -> void:
@@ -151,7 +199,7 @@ func _physics_process(delta: float) -> void:
 			left_grab_buffer = 0.0
 		else:
 			left_grab_buffer = GRAB_BUFFER
-			_spawn_grab_whiff(left_arm.to_global(Vector2(0, ARM_LEN)))
+			_spawn_grab_whiff(_hand_pos(true))
 	elif left_grab_buffer > 0.0 and Input.is_action_pressed(_a_gl) and stun_time <= 0.0 and left_regrip <= 0.0:
 		if _attempt_grab(true):
 			left_grab_buffer = 0.0
@@ -162,7 +210,7 @@ func _physics_process(delta: float) -> void:
 			left_regrip = REGRIP_COOLDOWN
 			_maybe_lunge()
 		if left_bottle != null:
-			_throw_bottle(left_bottle, left_arm)
+			_throw_bottle(left_bottle, true)
 			left_bottle = null
 
 	if Input.is_action_just_pressed(_a_gr) and stun_time <= 0.0 and right_regrip <= 0.0:
@@ -170,7 +218,7 @@ func _physics_process(delta: float) -> void:
 			right_grab_buffer = 0.0
 		else:
 			right_grab_buffer = GRAB_BUFFER
-			_spawn_grab_whiff(right_arm.to_global(Vector2(0, ARM_LEN)))
+			_spawn_grab_whiff(_hand_pos(false))
 	elif right_grab_buffer > 0.0 and Input.is_action_pressed(_a_gr) and stun_time <= 0.0 and right_regrip <= 0.0:
 		if _attempt_grab(false):
 			right_grab_buffer = 0.0
@@ -181,7 +229,7 @@ func _physics_process(delta: float) -> void:
 			right_regrip = REGRIP_COOLDOWN
 			_maybe_lunge()
 		if right_bottle != null:
-			_throw_bottle(right_bottle, right_arm)
+			_throw_bottle(right_bottle, false)
 			right_bottle = null
 
 	left_grab_buffer = maxf(0.0, left_grab_buffer - delta)
@@ -238,10 +286,10 @@ func stun(duration: float) -> void:
 	left_grab_buffer = 0.0
 	right_grab_buffer = 0.0
 	if left_bottle != null:
-		_drop_bottle(left_bottle, left_arm)
+		_drop_bottle(left_bottle, true)
 		left_bottle = null
 	if right_bottle != null:
-		_drop_bottle(right_bottle, right_arm)
+		_drop_bottle(right_bottle, false)
 		right_bottle = null
 	_hit_effect()
 	if get_parent().has_method("add_shake"):
@@ -263,15 +311,14 @@ func _hit_effect() -> void:
 	_mat.set_shader_parameter("flash", 0.0)
 
 
-func _drop_bottle(bottle: RigidBody2D, arm: Node2D) -> void:
+func _drop_bottle(bottle: RigidBody2D, is_left: bool) -> void:
 	bottle.add_collision_exception_with(self)
-	bottle.throw(arm.to_global(Vector2(0, ARM_LEN)), linear_velocity)
+	bottle.throw(_hand_pos(is_left), linear_velocity)
 
 
 # Try to grab with one hand: bottle wins over hold. Returns success.
 func _attempt_grab(is_left: bool) -> bool:
-	var arm := left_arm if is_left else right_arm
-	var hand := arm.to_global(Vector2(0, ARM_LEN))
+	var hand := _hand_pos(is_left)
 	var bottle := _find_bottle_near(hand)
 	if bottle != null:
 		if is_left:
@@ -321,12 +368,12 @@ func _find_bottle_near(hand_pos: Vector2) -> RigidBody2D:
 	return best
 
 
-func _throw_bottle(bottle: RigidBody2D, arm: Node2D) -> void:
-	var hand := arm.to_global(Vector2(0, ARM_LEN))
+func _throw_bottle(bottle: RigidBody2D, is_left: bool) -> void:
+	var hand := _hand_pos(is_left)
 	# Throw along the aim stick; no aim -> lob up-and-away from the body.
 	var dir := aim_dir
 	if dir == Vector2.ZERO:
-		dir = Vector2(0.4 if arm == right_arm else -0.4, -1.0).normalized()
+		dir = Vector2(-0.4 if is_left else 0.4, -1.0).normalized()
 	dir = _apply_aim_assist(dir.normalized(), hand)
 	bottle.add_collision_exception_with(self)
 	bottle.home_target = opponent  # slight in-flight homing toward the enemy
@@ -367,16 +414,18 @@ func _spawn_grab_whiff(pos: Vector2) -> void:
 
 
 func _process(delta: float) -> void:
+	_update_body_tilt(delta)
 	# An arm on regrip cooldown (or stunned) droops straight down — visual
 	# "not ready yet"; it tracks aim again the moment it can grab.
 	var left_ready := left_regrip <= 0.0 and stun_time <= 0.0
 	var right_ready := right_regrip <= 0.0 and stun_time <= 0.0
-	_update_arm(left_arm, left_locked, left_ready, left_anchor, LEFT_SHOULDER, true, delta)
-	_update_arm(right_arm, right_locked, right_ready, right_anchor, RIGHT_SHOULDER, false, delta)
-	_carry_bottle(left_bottle, left_arm)
-	_carry_bottle(right_bottle, right_arm)
-	_hl_left_hold = _update_highlight(_hl_left_hold, left_arm, left_locked or left_bottle != null or stun_time > 0.0, true)
-	_hl_right_hold = _update_highlight(_hl_right_hold, right_arm, right_locked or right_bottle != null or stun_time > 0.0, false)
+	_update_arm(true, left_locked, left_ready, left_anchor, delta)
+	_update_arm(false, right_locked, right_ready, right_anchor, delta)
+	_update_legs(delta)
+	_carry_bottle(left_bottle, true)
+	_carry_bottle(right_bottle, false)
+	_hl_left_hold = _update_highlight(_hl_left_hold, left_locked or left_bottle != null or stun_time > 0.0, true)
+	_hl_right_hold = _update_highlight(_hl_right_hold, right_locked or right_bottle != null or stun_time > 0.0, false)
 	# Stun feedback: fast red blink until control returns.
 	if stun_time > 0.0:
 		modulate = Color(1.0, 0.45, 0.45) if fmod(stun_time, 0.2) < 0.1 else Color.WHITE
@@ -384,11 +433,65 @@ func _process(delta: float) -> void:
 		modulate = Color.WHITE
 
 
+# Whole rig leans with horizontal motion (swinging on holds, flying through
+# the air), never more than TILT_MAX and always level while standing.
+func _update_body_tilt(delta: float) -> void:
+	var target := 0.0
+	if not _grounded:
+		target = clampf(linear_velocity.x * 0.002, -TILT_MAX, TILT_MAX)
+	_rig.rotation = lerpf(_rig.rotation, target, minf(TILT_SPEED * delta, 1.0))
+
+
+# Legs are pendulums hinged at the hips ("ass"): gravity pulls them toward
+# world-down, body acceleration swings them, and they may deviate at most
+# LEG_MAX from the body before the hip joint stops them. Purely visual —
+# the physics capsule is untouched, and the hip pivot can never separate
+# because the leg is an FK child of the rig.
+func _update_legs(delta: float) -> void:
+	var ax := 0.0
+	if delta > 0.0001:
+		ax = (linear_velocity.x - _prev_vx) / delta
+	_prev_vx = linear_velocity.x
+	var res_l := _sim_leg(_l_leg_a, _l_leg_w, L_LEG.length() * RIG_SCALE, ax, delta)
+	_l_leg_a = res_l.x
+	_l_leg_w = res_l.y
+	var res_r := _sim_leg(_r_leg_a, _r_leg_w, R_LEG.length() * RIG_SCALE, ax, delta)
+	_r_leg_a = res_r.x
+	_r_leg_w = res_r.y
+	left_leg.rotation = _l_leg_a
+	right_leg.rotation = _r_leg_a
+
+
+# One pendulum step; returns (angle, angular_velocity).
+func _sim_leg(a: float, w: float, length_px: float, ax: float, delta: float) -> Vector2:
+	if _grounded:
+		# Standing: legs spring straight under the body, no dangling.
+		w = lerpf(w, 0.0, minf(LEG_GROUND_SPRING * delta, 1.0))
+		a = lerpf(a, 0.0, minf(LEG_GROUND_SPRING * delta, 1.0))
+		return Vector2(a, w)
+	# World angle of the leg (0 = hanging straight down).
+	var psi := _rig.rotation + a
+	var g := ProjectSettings.get_setting("physics/2d/default_gravity", 980.0) as float
+	# Hinged-support pendulum: gravity restores toward down, horizontal body
+	# acceleration kicks the swing the other way.
+	var acc := (-g * sin(psi) - ax * cos(psi)) / length_px - LEG_DAMP * w
+	w += acc * delta
+	a += w * delta
+	# Hip hard-stop: never more than LEG_MAX away from the body.
+	if a > LEG_MAX:
+		a = LEG_MAX
+		w = minf(w, 0.0)
+	elif a < -LEG_MAX:
+		a = -LEG_MAX
+		w = maxf(w, 0.0)
+	return Vector2(a, w)
+
+
 # Highlight the hold this hand would grab right now; clear the previous one.
-func _update_highlight(prev: Node2D, arm: Node2D, hand_busy: bool, is_left: bool) -> Node2D:
+func _update_highlight(prev: Node2D, hand_busy: bool, is_left: bool) -> Node2D:
 	var next: Node2D = null
 	if not hand_busy:
-		next = _find_hold_near(arm.to_global(Vector2(0, ARM_LEN)))
+		next = _find_hold_near(_hand_pos(is_left))
 	if next == prev:
 		return prev
 	if prev != null and is_instance_valid(prev):
@@ -398,34 +501,71 @@ func _update_highlight(prev: Node2D, arm: Node2D, hand_busy: bool, is_left: bool
 	return next
 
 
-func _carry_bottle(bottle: RigidBody2D, arm: Node2D) -> void:
+func _carry_bottle(bottle: RigidBody2D, is_left: bool) -> void:
 	if bottle == null or not is_instance_valid(bottle):
 		return
-	bottle.global_position = arm.to_global(Vector2(0, ARM_LEN))
-	# Neck points away from the arm.
-	bottle.rotation = arm.rotation
+	bottle.global_position = _hand_pos(is_left)
+	# Neck points away from the forearm (0 = hanging down, old convention).
+	var fore := left_forearm if is_left else right_forearm
+	var rest_f := (L_FORE if is_left else R_FORE).angle() - PI / 2.0
+	bottle.rotation = fore.global_rotation + rest_f
 
 
-func _update_arm(arm: Node2D, locked: bool, ready: bool, anchor: Vector2, shoulder: Vector2, is_left: bool, delta: float) -> void:
-	# rotation 0 == pointing down (+Y), so target = dir.angle() - PI/2.
-	var target: float
+# Pose one arm. Locked -> two-bone IK onto the anchor (elbow bends like a real
+# arm, straightens as the body sags to full reach). Free -> straight arm that
+# tracks aim; limp -> straight down. All motion is FK under the drawn pivots.
+func _update_arm(is_left: bool, locked: bool, ready: bool, anchor: Vector2, delta: float) -> void:
+	var upper := left_arm if is_left else right_arm
+	var fore := left_forearm if is_left else right_forearm
+	var u_vec := L_UPPER if is_left else R_UPPER
+	var f_vec := L_FORE if is_left else R_FORE
+	var rest_u := u_vec.angle() - PI / 2.0
+	var rest_f := f_vec.angle() - PI / 2.0
+	var l1 := u_vec.length()
+	var l2 := f_vec.length()
+
 	if locked:
-		# Point from shoulder toward the frozen anchor.
-		var shoulder_world := global_position + shoulder
-		target = (anchor - shoulder_world).angle() - PI / 2.0
-		arm.rotation = _clamp_arm_angle(target, is_left)
+		# IK in rig-local space (handles body tilt for free).
+		var to_a := _rig.to_local(anchor) - upper.position
+		var d := clampf(to_a.length(), absf(l1 - l2) + 0.01, l1 + l2)
+		var base := _clamp_arm_angle(to_a.angle() - PI / 2.0, is_left)
+		# Elbow points outward from the body.
+		var bend := 1.0 if is_left else -1.0
+		var a1 := acos(clampf((l1 * l1 + d * d - l2 * l2) / (2.0 * l1 * d), -1.0, 1.0))
+		var shoulder_ang := base + bend * a1
+		upper.rotation = shoulder_ang - rest_u
+		# Forearm aims from the actual elbow to the anchor -> joint stays exact.
+		var elbow := upper.position + Vector2.DOWN.rotated(shoulder_ang) * l1
+		var fore_ang := (to_a + upper.position - elbow).angle() - PI / 2.0
+		fore.rotation = fore_ang - rest_f - upper.rotation
+		_set_theta(is_left, shoulder_ang)
 	else:
 		# Cooldown/stun -> hang limp regardless of aim.
 		var dir := aim_dir if ready else Vector2.ZERO
-		if dir == Vector2.ZERO:
-			target = 0.0  # hang straight down
-		else:
+		var target := 0.0
+		if dir != Vector2.ZERO:
 			target = _clamp_arm_angle(dir.angle() - PI / 2.0, is_left)
 		# Plain lerp inside the arm's clamped domain (never through the wrong
 		# half, unlike lerp_angle which takes the shortest path around).
-		var current := _clamp_arm_angle(arm.rotation, is_left)
-		arm.rotation = _clamp_arm_angle(
-			lerpf(current, target, minf(ARM_TURN_SPEED * delta, 1.0)), is_left)
+		var theta := _clamp_arm_angle(
+			lerpf(_get_theta(is_left), target, minf(ARM_TURN_SPEED * delta, 1.0)), is_left)
+		_set_theta(is_left, theta)
+		upper.rotation = theta - rest_u
+		# Straight arm: forearm continues along the same world direction, so it
+		# relaxes toward the fully-extended pose.
+		var fore_target := (theta - rest_f) - upper.rotation
+		fore.rotation = lerpf(fore.rotation, fore_target, minf(ARM_TURN_SPEED * delta, 1.0))
+
+
+func _get_theta(is_left: bool) -> float:
+	return _l_theta if is_left else _r_theta
+
+
+func _set_theta(is_left: bool, v: float) -> void:
+	if is_left:
+		_l_theta = v
+	else:
+		_r_theta = v
 
 
 func _clamp_arm_angle(angle: float, is_left: bool) -> float:
@@ -439,19 +579,21 @@ func _clamp_arm_angle(angle: float, is_left: bool) -> float:
 
 
 func _integrate_forces(state: PhysicsDirectBodyState2D) -> void:
-	_apply_arm_constraint(state, left_locked, left_anchor, LEFT_SHOULDER, true)
-	_apply_arm_constraint(state, right_locked, right_anchor, RIGHT_SHOULDER, false)
+	_apply_arm_constraint(state, left_locked, left_anchor, LEFT_SHOULDER, _reach_l, true)
+	_apply_arm_constraint(state, right_locked, right_anchor, RIGHT_SHOULDER, _reach_r, false)
 
 	# Tether floor: free to climb up/sideways, but never drop more than 1 m
 	# below the anchor. Y-only clamp, downward velocity killed.
 	_apply_tether_constraint(state)
+
+	_grounded = _on_ground(state)
 
 	# Rigid grip: velocity is steered, not force-pushed. No input -> hold still.
 	if left_locked or right_locked:
 		var desired := aim_dir * CLIMB_SPEED
 		state.linear_velocity = state.linear_velocity.lerp(
 			desired, minf(CLIMB_ACCEL * state.step, 1.0))
-	elif _on_ground(state):
+	elif _grounded:
 		# Standing on something: left/right input walks, immediately. No input ->
 		# stop. Vertical stays physics-owned.
 		state.linear_velocity.x = aim_dir.x * WALK_SPEED
@@ -492,7 +634,7 @@ func _on_ground(state: PhysicsDirectBodyState2D) -> bool:
 	return false
 
 
-func _apply_arm_constraint(state: PhysicsDirectBodyState2D, locked: bool, anchor: Vector2, shoulder: Vector2, is_left: bool) -> void:
+func _apply_arm_constraint(state: PhysicsDirectBodyState2D, locked: bool, anchor: Vector2, shoulder: Vector2, reach: float, is_left: bool) -> void:
 	if not locked:
 		return
 	# The arm only sweeps its own half-circle, so the anchor must stay on that
@@ -514,10 +656,10 @@ func _apply_arm_constraint(state: PhysicsDirectBodyState2D, locked: bool, anchor
 	var shoulder_world := state.transform.origin + shoulder
 	var v := shoulder_world - anchor
 	var d := v.length()
-	if d > ARM_REACH:
+	if d > reach:
 		var n := v / d
 		# Pull body back within reach.
-		state.transform.origin -= n * (d - ARM_REACH)
+		state.transform.origin -= n * (d - reach)
 		# Kill outward radial velocity -> pendulum swing.
 		var rad := state.linear_velocity.dot(n)
 		if rad > 0.0:
