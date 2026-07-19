@@ -184,6 +184,8 @@ func _physics_process(delta: float) -> void:
 	# swings naturally instead of hovering.
 	gravity_scale = HANG_GRAVITY if (left_locked or right_locked) else 1.0
 
+	_update_tether()
+
 
 # Deadpoint leap: releasing the LAST grip while steering throws the body in
 # the aim direction. Release timing becomes the climbing skill.
@@ -192,8 +194,6 @@ func _maybe_lunge() -> void:
 		return
 	if aim_dir != Vector2.ZERO:
 		linear_velocity += aim_dir * LUNGE_SPEED
-
-	_update_tether()
 
 
 # Auto-attach to a nearby tether point; on a new attachment the old point is
