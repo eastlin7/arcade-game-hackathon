@@ -24,6 +24,14 @@ const RIGHT_SHOULDER := Vector2(22.5, -28.5)
 
 const THROW_SPEED := 620.0
 
+# Aim assist: throws bend toward the opponent when roughly aimed at them.
+const AIM_ASSIST_MAX_ANGLE := deg_to_rad(18.0)  # max correction applied
+const AIM_ASSIST_CONE := deg_to_rad(55.0)       # opponent must be within this of aim
+const AIM_ASSIST_LEAD_MAX := 0.6                # cap on predicted flight time (s)
+
+# The other player (set by Game.gd); used for throw aim assist.
+var opponent: RigidBody2D = null
+
 # Coyote grab buffer: a missed press keeps retrying this long while held.
 const GRAB_BUFFER := 0.12
 
@@ -312,8 +320,27 @@ func _throw_bottle(bottle: RigidBody2D, arm: Node2D) -> void:
 	var dir := aim_dir
 	if dir == Vector2.ZERO:
 		dir = Vector2(0.4 if arm == right_arm else -0.4, -1.0).normalized()
+	dir = _apply_aim_assist(dir.normalized(), hand)
 	bottle.add_collision_exception_with(self)
 	bottle.throw(hand, dir * THROW_SPEED + linear_velocity)
+
+
+# Bend a throw direction toward the opponent (with a little velocity lead),
+# but only when the throw is already roughly aimed at them, and never by more
+# than AIM_ASSIST_MAX_ANGLE — assisted, not homing.
+func _apply_aim_assist(dir: Vector2, hand: Vector2) -> Vector2:
+	if opponent == null or not is_instance_valid(opponent):
+		return dir
+	var to_target := opponent.global_position - hand
+	if to_target.length_squared() < 1.0:
+		return dir
+	# Lead: aim where the opponent will roughly be after the flight time.
+	var flight := minf(to_target.length() / THROW_SPEED, AIM_ASSIST_LEAD_MAX)
+	to_target += opponent.linear_velocity * flight
+	var off := dir.angle_to(to_target.normalized())
+	if absf(off) > AIM_ASSIST_CONE:
+		return dir  # aimed away — don't boomerang
+	return dir.rotated(clampf(off, -AIM_ASSIST_MAX_ANGLE, AIM_ASSIST_MAX_ANGLE))
 
 
 func _spawn_grab_splash(pos: Vector2) -> void:
