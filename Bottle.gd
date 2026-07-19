@@ -10,8 +10,15 @@ const BOTTLE_COLORS := [
 
 const STUN_DURATION := 2.0
 
+# In-flight homing: when the target player is near, the course bends slightly
+# toward them. Weak on purpose — assisted, not a guided missile.
+const HOMING_RADIUS := 260.0             # only homes inside this range
+const HOMING_TURN := deg_to_rad(140.0)   # max course change per second at full strength
+
 var carried := false
 var _armed := false  # true while in flight after a throw — only then it stuns
+# Player to home toward (set by the thrower; null = no homing).
+var home_target: Node2D = null
 var _glass: Color = BOTTLE_COLORS[0]
 
 const GrabSplashScript := preload("res://GrabSplash.gd")
@@ -62,6 +69,21 @@ func throw(from: Vector2, velocity: Vector2) -> void:
 	_shape.set_deferred("disabled", false)
 	linear_velocity = velocity
 	angular_velocity = randf_range(-12.0, 12.0)
+
+
+func _physics_process(delta: float) -> void:
+	# Slight homing while flying: bend the velocity toward a nearby target,
+	# stronger the closer they are. Speed is preserved; gravity still applies.
+	if not _armed or home_target == null or not is_instance_valid(home_target):
+		return
+	var to_target := home_target.global_position - global_position
+	var dist := to_target.length()
+	if dist > HOMING_RADIUS or linear_velocity.length_squared() < 1.0:
+		return
+	var strength := 1.0 - dist / HOMING_RADIUS  # 0 at edge -> 1 point blank
+	var off := linear_velocity.angle_to(to_target)
+	var max_turn := HOMING_TURN * strength * delta
+	linear_velocity = linear_velocity.rotated(clampf(off, -max_turn, max_turn))
 
 
 func _process(_delta: float) -> void:

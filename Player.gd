@@ -329,6 +329,7 @@ func _throw_bottle(bottle: RigidBody2D, arm: Node2D) -> void:
 		dir = Vector2(0.4 if arm == right_arm else -0.4, -1.0).normalized()
 	dir = _apply_aim_assist(dir.normalized(), hand)
 	bottle.add_collision_exception_with(self)
+	bottle.home_target = opponent  # slight in-flight homing toward the enemy
 	bottle.throw(hand, dir * THROW_SPEED + linear_velocity)
 
 
