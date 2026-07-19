@@ -27,7 +27,12 @@ const LINE_SALTS: Array[int] = [0x5EED, 0xCAFE]
 
 const HoldScene := preload("res://Hold.tscn")
 const BottleScene := preload("res://Bottle.tscn")
+const TetherPointScript := preload("res://TetherPoint.gd")
 const BOTTLE_CHANCE := 0.18  # chance per row a bottle sits on the wall
+# Tether points: one per guide line every TETHER_INTERVAL rows (phase-shifted
+# per line so both players' points don't land on the same row).
+const TETHER_INTERVAL := 7
+const TETHER_PHASES: Array[int] = [3, 6]
 
 # row_index -> container Node2D holding that row's holds.
 var _rows: Dictionary = {}
@@ -111,7 +116,19 @@ func _spawn_row(r: int) -> void:
 				placed.append(hx)
 
 
-	# 3. Occasional throwable bottle, parked clear of this row's holds.
+	# 3. Deterministic tether point on a guide line every TETHER_INTERVAL rows
+	# (alongside the row's normal holds, nudged to the side of the line).
+	for line in LINE_STARTS.size():
+		if r > 0 and (r + TETHER_PHASES[line]) % TETHER_INTERVAL == 0:
+			var lx := _get_line_x(line, r)
+			var side := -1.0 if rng.randf() < 0.5 else 1.0
+			var tx := clampf(lx + side * rng.randf_range(30.0, 55.0), X_MIN, X_MAX)
+			var tp := Node2D.new()
+			tp.set_script(TetherPointScript)
+			tp.position = Vector2(tx, row_y + rng.randf_range(-JITTER_Y, JITTER_Y))
+			container.add_child(tp)
+
+	# 4. Occasional throwable bottle, parked clear of this row's holds.
 	if rng.randf() < BOTTLE_CHANCE:
 		var bx := rng.randf_range(X_MIN, X_MAX)
 		if _clear_of(placed, bx):
