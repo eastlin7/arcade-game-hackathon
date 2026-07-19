@@ -43,11 +43,11 @@ script = ExtResource("3_spawner")
 
 [node name="Player" parent="." instance=ExtResource("2_player")]
 position = Vector2(300, 514)
-input_prefix = "p1"
+input_prefix = "p2"
 
 [node name="Player2" parent="." instance=ExtResource("2_player")]
 position = Vector2(850, 514)
-input_prefix = "p2"
+input_prefix = "p1"
 red_tint = true
 
 [node name="EventManager" type="Node2D" parent="."]
