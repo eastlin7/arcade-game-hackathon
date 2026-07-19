@@ -4,9 +4,15 @@ extends RigidBody2D
 # grabbing/pivoting happens mid-palm), world reach = local * 3x scale.
 const ARM_LEN := 17.0
 const ARM_REACH := 51.0
-const CLIMB_SPEED := 200.0  # steering speed while gripping (px/s)
-const CLIMB_ACCEL := 10.0   # how snappily velocity follows input while gripping
+const CLIMB_SPEED := 140.0  # steering speed while gripping (px/s)
+const CLIMB_ACCEL := 6.0    # how snappily velocity follows input while gripping
+const HANG_GRAVITY := 0.25  # partial gravity while gripping -> natural sag/swing
+const REGRIP_COOLDOWN := 0.3  # per-hand delay between release and next grab
+const LUNGE_SPEED := 380.0  # impulse when releasing the last grip while aiming
 const ARM_TURN_SPEED := 12.0
+
+# Ground walking (only way to move without gripping).
+const WALK_SPEED := 160.0
 # Snap-assist range around the hand tip — deliberately larger than the hand
 # itself, so holds a bit beyond actual reach still catch; the arm constraint
 # then pulls the body toward the hold.
@@ -40,6 +46,10 @@ var right_grab_buffer := 0.0
 
 # Remaining stun time (bottle hit): hands forced open, no gripping allowed.
 var stun_time := 0.0
+
+# Per-hand regrip cooldown (anti button-mash: alternate hands to climb fast).
+var left_regrip := 0.0
+var right_regrip := 0.0
 
 # Currently highlighted (reachable) hold per hand.
 var _hl_left_hold: Node2D = null
@@ -87,6 +97,9 @@ func _ready() -> void:
 	_mat.set_shader_parameter("mix_amount", 0.8 if red_tint else 0.0)
 	for sprite: CanvasItem in [$BodySprite, $LeftArm/ArmSprite, $RightArm/ArmSprite]:
 		sprite.material = _mat
+	# Needed so _integrate_forces can read floor contacts for ground walking.
+	contact_monitor = true
+	max_contacts_reported = 6
 
 
 func _physics_process(delta: float) -> void:
@@ -97,34 +110,43 @@ func _physics_process(delta: float) -> void:
 	# A missed press whiffs visibly and keeps retrying for GRAB_BUFFER seconds
 	# (coyote grab) while the key stays held. Stunned -> grabs blocked entirely.
 	stun_time = maxf(0.0, stun_time - delta)
-	if Input.is_action_just_pressed(_a_gl) and stun_time <= 0.0:
+	left_regrip = maxf(0.0, left_regrip - delta)
+	right_regrip = maxf(0.0, right_regrip - delta)
+
+	if Input.is_action_just_pressed(_a_gl) and stun_time <= 0.0 and left_regrip <= 0.0:
 		if _attempt_grab(true):
 			left_grab_buffer = 0.0
 		else:
 			left_grab_buffer = GRAB_BUFFER
 			_spawn_grab_whiff(left_arm.to_global(Vector2(0, ARM_LEN)))
-	elif left_grab_buffer > 0.0 and Input.is_action_pressed(_a_gl) and stun_time <= 0.0:
+	elif left_grab_buffer > 0.0 and Input.is_action_pressed(_a_gl) and stun_time <= 0.0 and left_regrip <= 0.0:
 		if _attempt_grab(true):
 			left_grab_buffer = 0.0
 	if Input.is_action_just_released(_a_gl):
 		left_grab_buffer = 0.0
-		left_locked = false
+		if left_locked:
+			left_locked = false
+			left_regrip = REGRIP_COOLDOWN
+			_maybe_lunge()
 		if left_bottle != null:
 			_throw_bottle(left_bottle, left_arm)
 			left_bottle = null
 
-	if Input.is_action_just_pressed(_a_gr) and stun_time <= 0.0:
+	if Input.is_action_just_pressed(_a_gr) and stun_time <= 0.0 and right_regrip <= 0.0:
 		if _attempt_grab(false):
 			right_grab_buffer = 0.0
 		else:
 			right_grab_buffer = GRAB_BUFFER
 			_spawn_grab_whiff(right_arm.to_global(Vector2(0, ARM_LEN)))
-	elif right_grab_buffer > 0.0 and Input.is_action_pressed(_a_gr) and stun_time <= 0.0:
+	elif right_grab_buffer > 0.0 and Input.is_action_pressed(_a_gr) and stun_time <= 0.0 and right_regrip <= 0.0:
 		if _attempt_grab(false):
 			right_grab_buffer = 0.0
 	if Input.is_action_just_released(_a_gr):
 		right_grab_buffer = 0.0
-		right_locked = false
+		if right_locked:
+			right_locked = false
+			right_regrip = REGRIP_COOLDOWN
+			_maybe_lunge()
 		if right_bottle != null:
 			_throw_bottle(right_bottle, right_arm)
 			right_bottle = null
@@ -132,8 +154,18 @@ func _physics_process(delta: float) -> void:
 	left_grab_buffer = maxf(0.0, left_grab_buffer - delta)
 	right_grab_buffer = maxf(0.0, right_grab_buffer - delta)
 
-	# While gripping, the climber holds on: no gravity sag, movement is steered.
-	gravity_scale = 0.0 if (left_locked or right_locked) else 1.0
+	# While gripping, partial gravity: the body sags under the anchor and
+	# swings naturally instead of hovering.
+	gravity_scale = HANG_GRAVITY if (left_locked or right_locked) else 1.0
+
+
+# Deadpoint leap: releasing the LAST grip while steering throws the body in
+# the aim direction. Release timing becomes the climbing skill.
+func _maybe_lunge() -> void:
+	if left_locked or right_locked:
+		return
+	if aim_dir != Vector2.ZERO:
+		linear_velocity += aim_dir * LUNGE_SPEED
 
 
 # Bottle hit: hands fly open and can't grip for `duration`. Carried bottles drop.
@@ -328,6 +360,18 @@ func _integrate_forces(state: PhysicsDirectBodyState2D) -> void:
 		var desired := aim_dir * CLIMB_SPEED
 		state.linear_velocity = state.linear_velocity.lerp(
 			desired, minf(CLIMB_ACCEL * state.step, 1.0))
+	elif _on_ground(state):
+		# Standing on something: left/right walks. Vertical stays physics-owned.
+		state.linear_velocity.x = lerpf(state.linear_velocity.x,
+			aim_dir.x * WALK_SPEED, minf(CLIMB_ACCEL * state.step, 1.0))
+
+
+# Grounded when any contact pushes us upward (floor or other flat top).
+func _on_ground(state: PhysicsDirectBodyState2D) -> bool:
+	for i in state.get_contact_count():
+		if state.get_contact_local_normal(i).y < -0.5:
+			return true
+	return false
 
 
 func _apply_arm_constraint(state: PhysicsDirectBodyState2D, locked: bool, anchor: Vector2, shoulder: Vector2, is_left: bool) -> void:
