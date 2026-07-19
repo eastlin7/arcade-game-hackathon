@@ -28,6 +28,10 @@ const SHAKE_DECAY := 22.0
 
 var _shake := 0.0
 
+# Competitive scoring: +1 pt/sec to whichever player is strictly higher
+# (rounded to the meter, same calc as the HUD). Tie -> nobody scores.
+var _score_accum := 0.0
+
 
 func add_shake(amount: float) -> void:
 	_shake = maxf(_shake, amount)
@@ -52,6 +56,22 @@ func _process(delta: float) -> void:
 		_shake = maxf(0.0, _shake - SHAKE_DECAY * real_delta * maxf(_shake / 6.0, 0.5))
 	elif camera.offset != Vector2.ZERO:
 		camera.offset = Vector2.ZERO
+
+	# Competitive scoring tick.
+	var h1: int = height_hud.height_m()
+	var h2: int = height_hud2.height_m()
+	height_hud.set_leading(h1 > h2)
+	height_hud2.set_leading(h2 > h1)
+	if h1 == h2:
+		_score_accum = 0.0
+	else:
+		_score_accum += delta
+		while _score_accum >= 1.0:
+			_score_accum -= 1.0
+			if h1 > h2:
+				height_hud.add_point()
+			else:
+				height_hud2.add_point()
 
 
 func _unhandled_input(event: InputEvent) -> void:

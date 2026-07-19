@@ -33,6 +33,8 @@ const GLYPHS := {
 	"I": ["###", ".#.", ".#.", ".#.", "###"],
 	"G": ["###", "#..", "#.#", "#.#", "###"],
 	"T": ["###", ".#.", ".#.", ".#.", ".#."],
+	"P": ["###", "#.#", "###", "#..", "#.."],
+	"S": ["###", "#..", "###", "..#", "###"],
 	" ": ["...", "...", "...", "...", "..."],
 }
 
@@ -40,36 +42,76 @@ var player: Node2D = null
 var _start_y := 0.0
 var _height_m := -1  # last drawn value; redraw only on change
 
+# Competitive score (driven by Game.gd).
+var _score := 0
+var _leading := false  # strictly higher than the other player -> pulse effect
+var _flash := 0.0      # 1.0 -> 0.0 pop each time a point lands
+var _time := 0.0       # drives the leader pulse
+
 
 func setup(p: Node2D) -> void:
 	player = p
 	_start_y = p.global_position.y
 
 
-func _process(_delta: float) -> void:
+func height_m() -> int:
+	if player == null or not is_instance_valid(player):
+		return 0
+	return maxi(0, int((_start_y - player.global_position.y) / PIXELS_PER_METER))
+
+
+func add_point() -> void:
+	_score += 1
+	_flash = 1.0
+	queue_redraw()
+
+
+func set_leading(l: bool) -> void:
+	if l != _leading:
+		_leading = l
+		queue_redraw()
+
+
+func _process(delta: float) -> void:
 	if player == null or not is_instance_valid(player):
 		return
-	var m := maxi(0, int((_start_y - player.global_position.y) / PIXELS_PER_METER))
+	var m := height_m()
 	if m != _height_m:
 		_height_m = m
+		queue_redraw()
+	# Animate only while the effect is live (cheap: static HUD redraws on change).
+	if _leading or _flash > 0.0:
+		_time += delta
+		_flash = maxf(0.0, _flash - delta * 3.0)
 		queue_redraw()
 
 
 func _draw() -> void:
 	var num := "%dM" % maxi(_height_m, 0)
-	var pos := MARGIN
+	var score_txt := "%d PTS" % _score
+
+	# Leader effect: pulsing brighter color + a size pop when a point lands.
+	var score_col := fill
+	var score_s := float(PX)
+	if _leading:
+		var pulse := 0.5 + 0.5 * sin(_time * 6.0)
+		score_col = fill.lerp(Color(1.0, 1.0, 1.0), 0.35 + 0.4 * pulse)
+		score_s = PX * (1.0 + 0.06 * pulse + 0.25 * _flash)
+
+	var y_num := MARGIN.y + 5.0 * PX_SMALL + 8.0
+	var y_score := y_num + 5.0 * PX + 10.0
 	if right_side:
-		# Right-align both lines against the right margin.
+		# Right-align all lines against the right margin.
 		var w_cap := _text_width("HEIGHT", PX_SMALL)
 		var w_num := _text_width(num, PX)
-		pos = Vector2(size.x - MARGIN.x - w_cap, MARGIN.y)
-		_draw_text("HEIGHT", pos, PX_SMALL, FILL_CAPTION)
-		pos = Vector2(size.x - MARGIN.x - w_num, MARGIN.y + 5.0 * PX_SMALL + 8.0)
-		_draw_text(num, pos, PX, fill)
+		var w_sc := _text_width(score_txt, score_s)
+		_draw_text("HEIGHT", Vector2(size.x - MARGIN.x - w_cap, MARGIN.y), PX_SMALL, FILL_CAPTION)
+		_draw_text(num, Vector2(size.x - MARGIN.x - w_num, y_num), PX, fill)
+		_draw_text(score_txt, Vector2(size.x - MARGIN.x - w_sc, y_score), score_s, score_col)
 	else:
-		_draw_text("HEIGHT", pos, PX_SMALL, FILL_CAPTION)
-		pos.y += 5.0 * PX_SMALL + 8.0
-		_draw_text(num, pos, PX, fill)
+		_draw_text("HEIGHT", MARGIN, PX_SMALL, FILL_CAPTION)
+		_draw_text(num, Vector2(MARGIN.x, y_num), PX, fill)
+		_draw_text(score_txt, Vector2(MARGIN.x, y_score), score_s, score_col)
 
 
 func _text_width(text: String, s: float) -> float:
