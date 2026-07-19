@@ -12,6 +12,10 @@ const GRAVITY := Vector2(0.0, 520.0)
 const DAMPING := 0.985
 const RELAX_ITERATIONS := 2
 const SLACK := 1.12                # rest length = distance * slack -> visible sag
+# Distance at which the rope reads as fully taut (player hanging 1 m below the
+# anchor = the tether limit). Slack fades out as the line approaches this.
+const TAUT_DIST := 100.0
+const FLOOR_Y := 596.0             # ground top is 600; rope never sinks below
 const MIN_REST_LEN := 3.0
 const SHOOT_TIME := 0.18
 const ROPE_COLOR := Color(0.85, 0.62, 0.30)
@@ -68,11 +72,18 @@ func _process(delta: float) -> void:
 		var vel := (p - _prev[i]) * DAMPING
 		_prev[i] = p
 		_pos[i] = p + vel + GRAVITY * dt2
+		if _pos[i].y > FLOOR_Y:
+			_pos[i].y = FLOOR_Y
 
 	# Pin endpoints, then relax segment lengths.
 	_pos[0] = head
 	_pos[SEGMENTS - 1] = tip
-	var rest := maxf(head.distance_to(tip) * SLACK / float(SEGMENTS - 1), MIN_REST_LEN)
+	# Slack fades to zero as the line stretches toward the tether limit — a
+	# player hanging at the 1 m floor sees a straight, taut rope.
+	var dist := head.distance_to(tip)
+	var taut := clampf((dist / TAUT_DIST - 0.6) / 0.4, 0.0, 1.0)
+	var slack := lerpf(SLACK, 1.0, taut)
+	var rest := maxf(dist * slack / float(SEGMENTS - 1), MIN_REST_LEN)
 	for _it in RELAX_ITERATIONS:
 		_pos[0] = head
 		_pos[SEGMENTS - 1] = tip

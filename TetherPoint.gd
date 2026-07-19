@@ -46,7 +46,8 @@ func _process(delta: float) -> void:
 	_fall_velocity.y += FALL_GRAVITY * delta
 	global_position += _fall_velocity * delta
 	rotation += _spin * delta
-	if global_position.y > _fall_origin_y + FALL_FREE_DIST:
+	# Free after 5 m of fall, or as soon as it would sink into the floor (600).
+	if global_position.y > _fall_origin_y + FALL_FREE_DIST or global_position.y > 590.0:
 		queue_free()
 
 

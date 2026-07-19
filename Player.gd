@@ -67,6 +67,8 @@ var _hl_right_hold: Node2D = null
 const TETHER_ATTACH_RADIUS := 60.0
 # While tethered, the body can never fall more than 1 m below the anchor.
 const TETHER_FLOOR_DROP := 100.0
+# ...nor stray more than 1 m left/right of it.
+const TETHER_SIDE_LIMIT := 100.0
 
 # Current tether point (null when untethered) and its frozen anchor position.
 var tether_point: Node2D = null
@@ -437,6 +439,17 @@ func _integrate_forces(state: PhysicsDirectBodyState2D) -> void:
 			state.transform.origin.y = floor_y
 			if state.linear_velocity.y > 0.0:
 				state.linear_velocity.y = 0.0
+		# Side limit: never more than 1 m left/right of the anchor.
+		var min_x := tether_anchor.x - TETHER_SIDE_LIMIT
+		var max_x := tether_anchor.x + TETHER_SIDE_LIMIT
+		if state.transform.origin.x < min_x:
+			state.transform.origin.x = min_x
+			if state.linear_velocity.x < 0.0:
+				state.linear_velocity.x = 0.0
+		elif state.transform.origin.x > max_x:
+			state.transform.origin.x = max_x
+			if state.linear_velocity.x > 0.0:
+				state.linear_velocity.x = 0.0
 
 	# Rigid grip: velocity is steered, not force-pushed. No input -> hold still.
 	if left_locked or right_locked:
@@ -444,9 +457,9 @@ func _integrate_forces(state: PhysicsDirectBodyState2D) -> void:
 		state.linear_velocity = state.linear_velocity.lerp(
 			desired, minf(CLIMB_ACCEL * state.step, 1.0))
 	elif _on_ground(state):
-		# Standing on something: left/right walks. Vertical stays physics-owned.
-		state.linear_velocity.x = lerpf(state.linear_velocity.x,
-			aim_dir.x * WALK_SPEED, minf(CLIMB_ACCEL * state.step, 1.0))
+		# Standing on something: left/right input walks, immediately. No input ->
+		# stop. Vertical stays physics-owned.
+		state.linear_velocity.x = aim_dir.x * WALK_SPEED
 
 
 # Grounded when any contact pushes us upward (floor or other flat top).
