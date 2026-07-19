@@ -65,10 +65,13 @@ var _hl_right_hold: Node2D = null
 
 # Tether: auto-attach when the body gets within this range of a tether point.
 const TETHER_ATTACH_RADIUS := 60.0
-# While tethered, the body can never fall more than 1 m below the anchor.
-const TETHER_FLOOR_DROP := 100.0
-# ...nor stray more than 1 m left/right of it.
-const TETHER_SIDE_LIMIT := 100.0
+# Tether rope: while the body is BELOW the anchor it behaves like a real 1 m
+# rope — a radial constraint. Above the anchor the rope is slack and climbing
+# is unrestricted. At the rope's end the outward (radial) velocity partly
+# reflects (bounce) while the tangential part survives -> pendulum swing.
+const TETHER_ROPE_LEN := 100.0
+const TETHER_BOUNCE := 0.35    # restitution of radial velocity at the rope end
+const TETHER_SWING_DAMP := 0.4 # tangential damping per second while hanging
 
 # Current tether point (null when untethered) and its frozen anchor position.
 var tether_point: Node2D = null
@@ -435,23 +438,7 @@ func _integrate_forces(state: PhysicsDirectBodyState2D) -> void:
 
 	# Tether floor: free to climb up/sideways, but never drop more than 1 m
 	# below the anchor. Y-only clamp, downward velocity killed.
-	if tether_active:
-		var floor_y := tether_anchor.y + TETHER_FLOOR_DROP
-		if state.transform.origin.y > floor_y:
-			state.transform.origin.y = floor_y
-			if state.linear_velocity.y > 0.0:
-				state.linear_velocity.y = 0.0
-		# Side limit: never more than 1 m left/right of the anchor.
-		var min_x := tether_anchor.x - TETHER_SIDE_LIMIT
-		var max_x := tether_anchor.x + TETHER_SIDE_LIMIT
-		if state.transform.origin.x < min_x:
-			state.transform.origin.x = min_x
-			if state.linear_velocity.x < 0.0:
-				state.linear_velocity.x = 0.0
-		elif state.transform.origin.x > max_x:
-			state.transform.origin.x = max_x
-			if state.linear_velocity.x > 0.0:
-				state.linear_velocity.x = 0.0
+	_apply_tether_constraint(state)
 
 	# Rigid grip: velocity is steered, not force-pushed. No input -> hold still.
 	if left_locked or right_locked:
@@ -462,6 +449,33 @@ func _integrate_forces(state: PhysicsDirectBodyState2D) -> void:
 		# Standing on something: left/right input walks, immediately. No input ->
 		# stop. Vertical stays physics-owned.
 		state.linear_velocity.x = aim_dir.x * WALK_SPEED
+
+
+# Pendulum rope: only acts while the body hangs BELOW the anchor and past the
+# rope's length. Position is projected back onto the rope circle; the velocity
+# is split into radial (along the rope) and tangential parts — the outward
+# radial part bounces back scaled by restitution, the tangential part is kept
+# (lightly damped), so the body swings like a mass on a line instead of
+# freezing at an invisible floor.
+func _apply_tether_constraint(state: PhysicsDirectBodyState2D) -> void:
+	if not tether_active:
+		return
+	var v := state.transform.origin - tether_anchor
+	if v.y <= 0.0:
+		return  # at/above the anchor: rope slack, climb freely
+	var d := v.length()
+	if d <= TETHER_ROPE_LEN:
+		return  # inside the rope's reach: still slack
+	var n := v / d  # radial direction, anchor -> body
+	# Snap back onto the circle of the taut rope.
+	state.transform.origin = tether_anchor + n * TETHER_ROPE_LEN
+	var rad := state.linear_velocity.dot(n)
+	if rad > 0.0:
+		var tangential := state.linear_velocity - n * rad
+		# Light damping so wild swings settle into a natural dangle.
+		tangential *= maxf(0.0, 1.0 - TETHER_SWING_DAMP * state.step)
+		# Reflect the outward speed back along the rope -> bounce at the end.
+		state.linear_velocity = tangential - n * rad * TETHER_BOUNCE
 
 
 # Grounded when any contact pushes us upward (floor or other flat top).
