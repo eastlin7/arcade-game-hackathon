@@ -128,6 +128,8 @@ func _ready() -> void:
 	_tether_rope.set_script(TetherRopeScript)
 	_tether_rope.player = self
 	add_child(_tether_rope)
+	# First child -> draws under the body/arm sprites but above the background.
+	move_child(_tether_rope, 0)
 
 
 func _physics_process(delta: float) -> void:

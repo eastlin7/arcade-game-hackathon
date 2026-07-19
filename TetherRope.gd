@@ -33,7 +33,9 @@ var _active := false
 func _ready() -> void:
 	top_level = true  # world-space drawing, ignore player transform
 	global_position = Vector2.ZERO
-	z_index = -1      # behind the climber sprites
+	# z 0: above the wall background (also z 0, but earlier in the tree).
+	# Drawing before the player's sprites (child index 0) keeps it behind the
+	# climber without dropping below the background.
 
 
 func shoot_to(target: Vector2) -> void:
