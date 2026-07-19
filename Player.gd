@@ -366,8 +366,12 @@ func _spawn_grab_whiff(pos: Vector2) -> void:
 
 
 func _process(delta: float) -> void:
-	_update_arm(left_arm, left_locked, left_anchor, LEFT_SHOULDER, true, delta)
-	_update_arm(right_arm, right_locked, right_anchor, RIGHT_SHOULDER, false, delta)
+	# An arm on regrip cooldown (or stunned) droops straight down — visual
+	# "not ready yet"; it tracks aim again the moment it can grab.
+	var left_ready := left_regrip <= 0.0 and stun_time <= 0.0
+	var right_ready := right_regrip <= 0.0 and stun_time <= 0.0
+	_update_arm(left_arm, left_locked, left_ready, left_anchor, LEFT_SHOULDER, true, delta)
+	_update_arm(right_arm, right_locked, right_ready, right_anchor, RIGHT_SHOULDER, false, delta)
 	_carry_bottle(left_bottle, left_arm)
 	_carry_bottle(right_bottle, right_arm)
 	_hl_left_hold = _update_highlight(_hl_left_hold, left_arm, left_locked or left_bottle != null or stun_time > 0.0, true)
@@ -401,7 +405,7 @@ func _carry_bottle(bottle: RigidBody2D, arm: Node2D) -> void:
 	bottle.rotation = arm.rotation
 
 
-func _update_arm(arm: Node2D, locked: bool, anchor: Vector2, shoulder: Vector2, is_left: bool, delta: float) -> void:
+func _update_arm(arm: Node2D, locked: bool, ready: bool, anchor: Vector2, shoulder: Vector2, is_left: bool, delta: float) -> void:
 	# rotation 0 == pointing down (+Y), so target = dir.angle() - PI/2.
 	var target: float
 	if locked:
@@ -410,7 +414,8 @@ func _update_arm(arm: Node2D, locked: bool, anchor: Vector2, shoulder: Vector2, 
 		target = (anchor - shoulder_world).angle() - PI / 2.0
 		arm.rotation = _clamp_arm_angle(target, is_left)
 	else:
-		var dir := aim_dir
+		# Cooldown/stun -> hang limp regardless of aim.
+		var dir := aim_dir if ready else Vector2.ZERO
 		if dir == Vector2.ZERO:
 			target = 0.0  # hang straight down
 		else:
