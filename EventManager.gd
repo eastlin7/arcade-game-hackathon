@@ -13,13 +13,16 @@ const WARNING_TIME := 2.5
 const WALL_CENTER_X := 576.0
 
 # Bottle rain tuning.
-const RAIN_MIN_BOTTLES := 3
-const RAIN_MAX_BOTTLES := 8
+const RAIN_MIN_BOTTLES := 12
+const RAIN_MAX_BOTTLES := 32
 const RAIN_SPREAD_TIME := 2.0          # bottles staggered across this window
 const RAIN_EDGE_MARGIN := 0.2          # spawn band skips 20% top and bottom
-const RAIN_SPEED_MIN := 380.0
-const RAIN_SPEED_MAX := 560.0
-const RAIN_ANGLE_JITTER := deg_to_rad(22.0)  # per-bottle deviation from straight-in
+const RAIN_SPEED_MIN := 560.0
+const RAIN_SPEED_MAX := 760.0
+# Base course tilts upward: fired flat they'd arc down and die early — with
+# lift they scrape across the whole screen before gravity wins.
+const RAIN_ANGLE_UP := deg_to_rad(14.0)
+const RAIN_ANGLE_JITTER := deg_to_rad(12.0)  # per-bottle deviation from the base course
 
 const DangerArrowScript := preload("res://DangerArrow.gd")
 const BoulderScript := preload("res://Boulder.gd")
@@ -157,7 +160,9 @@ func _spawn_rain_bottle() -> void:
 	var y := cam.global_position.y - half_h + half_h * 2.0 * RAIN_EDGE_MARGIN + randf() * y_span
 	var s := 1.0 if _rain_side == "left" else -1.0  # inward x direction
 	var x := cam.global_position.x - s * (half_w + 40.0)
-	var dir := Vector2(s, 0.0).rotated(randf_range(-RAIN_ANGLE_JITTER, RAIN_ANGLE_JITTER))
+	# Tilt up (screen up = -y, so rotate against the inward x direction).
+	var dir := Vector2(s, 0.0).rotated(
+		-s * RAIN_ANGLE_UP + randf_range(-RAIN_ANGLE_JITTER, RAIN_ANGLE_JITTER))
 	var bottle := BottleScene.instantiate()
 	add_child(bottle)
 	bottle.throw(Vector2(x, y), dir * randf_range(RAIN_SPEED_MIN, RAIN_SPEED_MAX))
