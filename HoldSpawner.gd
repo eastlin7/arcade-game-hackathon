@@ -10,7 +10,7 @@ const ROW_H := 70.0
 const JITTER_X := 18.0
 const JITTER_Y := 22.0
 const FIRST_ROW_Y := 540.0  # just above the floor top (600)
-# Camera zoom is 1x on a 1152x648 viewport -> full wall width visible.
+# Wall is 1152 px wide; the 1080-wide portrait view pans slightly within it.
 const X_MIN := 70.0
 const X_MAX := 1082.0
 const PATH_STEP_MAX := 85.0    # max lateral shift of a guide line per row
@@ -45,7 +45,7 @@ func _process(_delta: float) -> void:
 	if cam == null:
 		return
 	var cam_y := cam.global_position.y
-	var view_h := 648.0
+	var view_h := 1920.0
 
 	# 2x margin: still covers the whole view when the camera zooms out to 0.67.
 	var spawn_above := cam_y - 2.0 * view_h

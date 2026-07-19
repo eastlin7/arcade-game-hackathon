@@ -54,7 +54,7 @@ red_tint = true
 script = ExtResource("6_events")
 
 [node name="Camera" type="Camera2D" parent="."]
-position = Vector2(576, 324)
+position = Vector2(576, -336)
 zoom = Vector2(1.0, 1.0)
 limit_left = 0
 limit_right = 1152

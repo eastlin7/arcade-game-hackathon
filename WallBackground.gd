@@ -18,7 +18,7 @@ func _process(_delta: float) -> void:
 	if cam == null:
 		return
 	var cam_y := cam.global_position.y
-	var view_h := 648.0
+	var view_h := 1920.0
 
 	var top_edge := cam_y - 1.2 * view_h
 	var bottom_edge := cam_y + 1.2 * view_h

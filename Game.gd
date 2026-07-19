@@ -16,10 +16,11 @@ func _ready() -> void:
 	player2.opponent = player
 
 
-# Camera zoom: 1.0 when players are close, eases out to ZOOM_FAR (shows ~50%
-# more world) as their separation grows from SEP_NEAR to SEP_FAR pixels.
+# Camera zoom: 1.0 when players are close, eases out to ZOOM_FAR as their
+# separation grows from SEP_NEAR to SEP_FAR pixels. ZOOM_FAR is capped so the
+# zoomed-out view is never wider than the 1152 px wall (1080 / 1152).
 const ZOOM_NEAR := 1.0
-const ZOOM_FAR := 0.67
+const ZOOM_FAR := 0.9375
 const SEP_NEAR := 350.0
 const SEP_FAR := 850.0
 const ZOOM_SPEED := 3.0
