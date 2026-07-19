@@ -8,8 +8,12 @@ extends Node2D
 # Bottle rain event: SIDE WARNING (danger arrow on a random screen edge) ->
 # RAINING (3-8 bottles hurled in from that edge, staggered over 2 s) -> done.
 
-const EVENT_INTERVAL := 30.0
-const EVENT_CHANCE := 0.5
+# Events stay dormant until any player climbs this high, then one fires
+# every EVENT_DELAY_MIN..MAX seconds (re-rolled after each event), guaranteed.
+const EVENT_START_HEIGHT_M := 15.0
+const EVENT_DELAY_MIN := 5.0
+const EVENT_DELAY_MAX := 15.0
+const PIXELS_PER_METER := 100.0  # same scale as HeightHud
 const WARNING_TIME := 2.5
 
 # Bottle rain tuning.
@@ -29,6 +33,9 @@ enum State { IDLE, WARNING, FALLING, RAIN_WARNING, RAINING }
 
 var players: Array = []  # set by Game._ready
 var _timer := 0.0
+var _armed := false      # true once someone has passed EVENT_START_HEIGHT_M
+var _next_in := 0.0      # current rolled delay until the next event
+var _start_y := 0.0      # spawn height baseline for the meter calc
 var _state: State = State.IDLE
 var _state_t := 0.0
 var _arrow: Node2D = null
@@ -43,19 +50,27 @@ var _rain_next := 0
 
 func setup(p: Array) -> void:
 	players = p
+	_start_y = p[0].global_position.y
 
 
 func _process(delta: float) -> void:
 	match _state:
 		State.IDLE:
+			if not _armed:
+				if _highest_height_m() >= EVENT_START_HEIGHT_M:
+					_armed = true
+					_next_in = randf_range(EVENT_DELAY_MIN, EVENT_DELAY_MAX)
+				return
+			# _timer only runs in IDLE, so the rolled delay is measured from
+			# the end of the previous event. Always fires — no chance roll.
 			_timer += delta
-			if _timer >= EVENT_INTERVAL:
+			if _timer >= _next_in:
 				_timer = 0.0
-				if randf() < EVENT_CHANCE:
-					if randf() < 0.5:
-						_start_boulder_warning()
-					else:
-						_start_rain_warning()
+				_next_in = randf_range(EVENT_DELAY_MIN, EVENT_DELAY_MAX)
+				if randf() < 0.5:
+					_start_boulder_warning()
+				else:
+					_start_rain_warning()
 		State.WARNING:
 			_state_t += delta
 			# Arrow shadows the highest climber until the drop commits.
@@ -143,6 +158,15 @@ func _spawn_rain_bottle() -> void:
 	var bottle := BottleScene.instantiate()
 	add_child(bottle)
 	bottle.throw(Vector2(x, y), dir * randf_range(RAIN_SPEED_MIN, RAIN_SPEED_MAX))
+
+
+# Best height above spawn across both players, in meters (HeightHud scale).
+func _highest_height_m() -> float:
+	var best := 0.0
+	for p: Node2D in players:
+		if is_instance_valid(p):
+			best = maxf(best, (_start_y - p.global_position.y) / PIXELS_PER_METER)
+	return best
 
 
 func _highest_player_x() -> float:
