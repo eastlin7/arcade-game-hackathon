@@ -17,16 +17,29 @@ const GLYPHS := {
 }
 
 var _t := 0.0
+# Which screen edge the warning pins to: "top" (boulder — arrow points down,
+# EventManager moves x), "left" or "right" (bottle rain — arrow points at that
+# edge, vertically centered).
+var edge := "top"
 
 
 func _process(delta: float) -> void:
 	_t += delta
-	# Pin to the top of the current camera view, keep constant screen size.
+	# Pin to the chosen edge of the current camera view, constant screen size.
 	var cam := get_viewport().get_camera_2d()
 	if cam != null:
 		var half_h := get_viewport_rect().size.y * 0.5 / cam.zoom.y
-		global_position.y = cam.global_position.y - half_h + 30.0 / cam.zoom.y
+		var half_w := get_viewport_rect().size.x * 0.5 / cam.zoom.x
 		scale = Vector2.ONE / cam.zoom.y
+		match edge:
+			"top":
+				global_position.y = cam.global_position.y - half_h + 30.0 / cam.zoom.y
+			"left":
+				global_position.x = cam.global_position.x - half_w + 55.0 / cam.zoom.x
+				global_position.y = cam.global_position.y
+			"right":
+				global_position.x = cam.global_position.x + half_w - 55.0 / cam.zoom.x
+				global_position.y = cam.global_position.y
 	queue_redraw()
 
 
@@ -36,17 +49,28 @@ func _draw() -> void:
 		return
 	# "DANGER" text centered above the arrow.
 	_draw_text("DANGER", Vector2(0.0, 0.0))
-	# Downward triangle arrow under the text, bobbing slightly.
 	var bob := sin(_t * 10.0) * 3.0
-	var top_y := 5.0 * PX + 8.0 + bob
-	var pts := PackedVector2Array([
-		Vector2(-14.0, top_y), Vector2(14.0, top_y), Vector2(0.0, top_y + 20.0),
-	])
-	var outline := PackedVector2Array([
-		Vector2(-17.0, top_y - 3.0), Vector2(17.0, top_y - 3.0), Vector2(0.0, top_y + 25.0),
-	])
-	draw_colored_polygon(outline, STROKE)
-	draw_colored_polygon(pts, FILL)
+	if edge == "top":
+		# Downward triangle arrow under the text, bobbing slightly.
+		var top_y := 5.0 * PX + 8.0 + bob
+		draw_colored_polygon(PackedVector2Array([
+			Vector2(-17.0, top_y - 3.0), Vector2(17.0, top_y - 3.0), Vector2(0.0, top_y + 25.0),
+		]), STROKE)
+		draw_colored_polygon(PackedVector2Array([
+			Vector2(-14.0, top_y), Vector2(14.0, top_y), Vector2(0.0, top_y + 20.0),
+		]), FILL)
+	else:
+		# Sideways arrow under the text, pointing at the screen edge.
+		var s := -1.0 if edge == "left" else 1.0
+		var cy := 5.0 * PX + 22.0
+		var cx := s * bob
+		draw_colored_polygon(PackedVector2Array([
+			Vector2(cx - s * 3.0, cy - 17.0), Vector2(cx - s * 3.0, cy + 17.0),
+			Vector2(cx + s * 25.0, cy),
+		]), STROKE)
+		draw_colored_polygon(PackedVector2Array([
+			Vector2(cx, cy - 14.0), Vector2(cx, cy + 14.0), Vector2(cx + s * 20.0, cy),
+		]), FILL)
 
 
 func _draw_text(text: String, center: Vector2) -> void:
