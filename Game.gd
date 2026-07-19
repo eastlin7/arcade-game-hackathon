@@ -14,6 +14,11 @@ func _ready() -> void:
 	$EventManager.setup([player, player2])
 	player.opponent = player2
 	player2.opponent = player
+	player.event_manager = $EventManager
+	player2.event_manager = $EventManager
+	_win_screen = CanvasLayer.new()
+	_win_screen.set_script(WinScreenScript)
+	add_child(_win_screen)
 
 
 # Camera zoom: 1.0 when players are close, eases out to ZOOM_FAR as their
@@ -30,6 +35,14 @@ const ZOOM_SPEED := 3.0
 const SHAKE_DECAY := 22.0
 
 var _shake := 0.0
+
+# Race: first player to WIN_HEIGHT_M meters wins.
+const WIN_HEIGHT_M := 100
+const WinScreenScript := preload("res://WinScreen.gd")
+const P1_COLOR := Color(1.0, 0.85, 0.3)
+const P2_COLOR := Color(1.0, 0.35, 0.3)
+var _win_screen: CanvasLayer = null
+var _won := false
 
 # Competitive scoring: +1 pt/sec to whichever player is strictly higher
 # (rounded to the meter, same calc as the HUD). Tie -> nobody scores.
@@ -63,6 +76,15 @@ func _process(delta: float) -> void:
 	# Competitive scoring tick.
 	var h1: int = height_hud.height_m()
 	var h2: int = height_hud2.height_m()
+
+	# Race finish: first to WIN_HEIGHT_M takes it. Simultaneous -> higher wins;
+	# exact tie -> P1 by pixel (nearly impossible).
+	if not _won and (h1 >= WIN_HEIGHT_M or h2 >= WIN_HEIGHT_M):
+		_won = true
+		var p1_wins := h1 >= WIN_HEIGHT_M and (h2 < WIN_HEIGHT_M
+			or player.global_position.y <= player2.global_position.y)
+		_win_screen.show_win(1 if p1_wins else 2, P1_COLOR if p1_wins else P2_COLOR)
+		return
 	height_hud.set_leading(h1 > h2)
 	height_hud2.set_leading(h2 > h1)
 	if h1 == h2:

@@ -19,6 +19,11 @@ var carried := false
 var _armed := false  # true while in flight after a throw — only then it stuns
 # Player to home toward (set by the thrower; null = no homing).
 var home_target: Node2D = null
+# Blue-shell mode: no gravity, constant speed, relentless full homing onto
+# home_target — there is no dodging it.
+var super_homing := false
+const SUPER_SPEED := 520.0
+const SUPER_TURN := deg_to_rad(720.0)  # course correction per second
 var _glass: Color = BOTTLE_COLORS[0]
 
 const GrabSplashScript := preload("res://GrabSplash.gd")
@@ -69,12 +74,24 @@ func throw(from: Vector2, velocity: Vector2) -> void:
 	_shape.set_deferred("disabled", false)
 	linear_velocity = velocity
 	angular_velocity = randf_range(-12.0, 12.0)
+	if super_homing:
+		gravity_scale = 0.0
+		_glass = BOTTLE_COLORS[2]  # always blue — it's a blue shell
+		queue_redraw()
 
 
 func _physics_process(delta: float) -> void:
 	# Slight homing while flying: bend the velocity toward a nearby target,
 	# stronger the closer they are. Speed is preserved; gravity still applies.
 	if not _armed or home_target == null or not is_instance_valid(home_target):
+		return
+	if super_homing:
+		# Full pursuit: constant speed, hard steer straight at the target.
+		var want := (home_target.global_position - global_position).angle()
+		var have := linear_velocity.angle()
+		var turned := have + clampf(wrapf(want - have, -PI, PI),
+			-SUPER_TURN * delta, SUPER_TURN * delta)
+		linear_velocity = Vector2.from_angle(turned) * SUPER_SPEED
 		return
 	var to_target := home_target.global_position - global_position
 	var dist := to_target.length()
@@ -89,11 +106,17 @@ func _physics_process(delta: float) -> void:
 func _process(_delta: float) -> void:
 	# Despawn once far below the camera (thrown or missed).
 	var cam := get_viewport().get_camera_2d()
+	if super_homing and home_target != null and is_instance_valid(home_target):
+		return  # a blue shell never gives up
 	if cam != null and not carried and global_position.y > cam.global_position.y + 700.0:
 		queue_free()
 
 
 func _draw() -> void:
+	# Blue-shell aura so the victim sees doom coming.
+	if super_homing:
+		draw_circle(Vector2.ZERO, 34.0, Color(0.35, 0.55, 1.0, 0.18))
+		draw_circle(Vector2.ZERO, 24.0, Color(0.45, 0.65, 1.0, 0.25))
 	# Simple longneck bottle, drawn pointing up. ~14 wide, ~44 tall.
 	var body := _glass
 	var dark := body.darkened(0.35)

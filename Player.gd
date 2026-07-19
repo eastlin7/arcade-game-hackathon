@@ -45,6 +45,19 @@ const AIM_ASSIST_LEAD_MAX := 0.6                # cap on predicted flight time (
 
 # The other player (set by Game.gd); used for throw aim assist.
 var opponent: RigidBody2D = null
+# Hazard director (set by Game.gd); powers route through it.
+var event_manager: Node = null
+
+# Power-up boxes: collected by proximity; the rolled power is held until the
+# player fires it with the power button (panel Button 3). One at a time —
+# while holding one, boxes aren't picked up.
+const POWER_PICKUP_RADIUS := 80.0
+var power := ""
+# The homing bottle (blue shell) is a catch-up tool: only offered when this
+# player is at least this many meters BELOW the opponent.
+const HOMING_MIN_DEFICIT_M := 5.0
+const PX_PER_M := 100.0
+const BottleScene := preload("res://Bottle.tscn")
 
 # Coyote grab buffer: a missed press keeps retrying this long while held.
 const GRAB_BUFFER := 0.12
@@ -109,6 +122,7 @@ var tether_active := false
 var _tether_rope: Node2D = null
 
 const GrabSplashScript := preload("res://GrabSplash.gd")
+const PowerIconScript := preload("res://PowerIcon.gd")
 const TetherRopeScript := preload("res://TetherRope.gd")
 const GrabWhiffScript := preload("res://GrabWhiff.gd")
 const HitTextScript := preload("res://HitText.gd")
@@ -133,6 +147,7 @@ var _a_mu: String
 var _a_md: String
 var _a_gl: String
 var _a_gr: String
+var _a_pw: String
 
 @onready var _rig: Node2D = $Rig
 @onready var left_arm: Node2D = $Rig/LeftArm
@@ -156,6 +171,9 @@ func _ready() -> void:
 	_a_md = input_prefix + "_move_down"
 	_a_gl = input_prefix + "_grab_left"
 	_a_gr = input_prefix + "_grab_right"
+	_a_pw = input_prefix + "_power"
+	if not InputMap.has_action(_a_pw):
+		InputMap.add_action(_a_pw)  # safety on odd setups; real bindings exist
 	# Every player gets the shader (for the hit flash); only p2 gets the red mix.
 	_mat = ShaderMaterial.new()
 	_mat.shader = RedTintShader
@@ -177,6 +195,11 @@ func _ready() -> void:
 	add_child(_tether_rope)
 	# First child -> draws under the body/arm sprites but above the background.
 	move_child(_tether_rope, 0)
+	# Held-power badge floating above the head.
+	var icon := Node2D.new()
+	icon.set_script(PowerIconScript)
+	icon.player = self
+	add_child(icon)
 
 
 func _hand_pos(is_left: bool) -> Vector2:
@@ -240,6 +263,53 @@ func _physics_process(delta: float) -> void:
 	gravity_scale = HANG_GRAVITY if (left_locked or right_locked) else 1.0
 
 	_update_tether()
+	_check_powerups()
+	if power != "" and Input.is_action_just_pressed(_a_pw):
+		_use_power(power)
+		power = ""
+
+
+# Walk/climb into a gold box -> it pops and this player holds a rolled power
+# until Button 3 releases it.
+func _check_powerups() -> void:
+	if power != "":
+		return
+	for box: Node2D in get_tree().get_nodes_in_group("powerups"):
+		if box.global_position.distance_to(global_position) <= POWER_PICKUP_RADIUS:
+			box.collect()
+			power = _roll_power()
+			return
+
+
+# Rain and boulder always in the pool; the blue-shell homing bottle only when
+# this player is losing by at least HOMING_MIN_DEFICIT_M meters.
+func _roll_power() -> String:
+	var opts: Array[String] = ["rain", "boulder"]
+	if opponent != null and is_instance_valid(opponent):
+		var deficit_m := (global_position.y - opponent.global_position.y) / PX_PER_M
+		if deficit_m >= HOMING_MIN_DEFICIT_M:
+			opts.append("homing")
+	return opts.pick_random()
+
+
+func _use_power(kind: String) -> void:
+	match kind:
+		"homing":
+			var b: RigidBody2D = BottleScene.instantiate()
+			get_parent().add_child(b)
+			b.super_homing = true
+			b.home_target = opponent
+			b.add_collision_exception_with(self)
+			var dir := Vector2.UP
+			if opponent != null and is_instance_valid(opponent):
+				dir = (opponent.global_position - global_position).normalized()
+			b.throw(global_position + Vector2(0.0, -70.0), dir * 520.0)
+		"rain":
+			if event_manager != null:
+				event_manager.trigger_rain(self)
+		"boulder":
+			if event_manager != null:
+				event_manager.trigger_boulder(self)
 
 
 # Deadpoint leap: releasing the LAST grip while steering throws the body in
@@ -424,6 +494,12 @@ func _process(delta: float) -> void:
 	_update_legs(delta)
 	_carry_bottle(left_bottle, true)
 	_carry_bottle(right_bottle, false)
+	# A highlighted hold can be freed by row streaming — drop the stale ref
+	# before it hits a typed parameter.
+	if not is_instance_valid(_hl_left_hold):
+		_hl_left_hold = null
+	if not is_instance_valid(_hl_right_hold):
+		_hl_right_hold = null
 	_hl_left_hold = _update_highlight(_hl_left_hold, left_locked or left_bottle != null or stun_time > 0.0, true)
 	_hl_right_hold = _update_highlight(_hl_right_hold, right_locked or right_bottle != null or stun_time > 0.0, false)
 	# Stun feedback: fast red blink until control returns.

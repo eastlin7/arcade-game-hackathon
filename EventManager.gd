@@ -1,20 +1,16 @@
 extends Node2D
-# Rolls for a random event every EVENT_INTERVAL seconds. Each event runs as a
-# small state machine; only one event at a time.
+# Hazard director, driven by power-ups (no more autonomous timer). Players
+# call trigger_boulder(caster) / trigger_rain(caster); the hazard targets the
+# caster's opponent. One hazard runs at a time — extra triggers queue up.
 #
-# Boulder event: WARNING (danger arrow at the top of the screen tracks the
-# highest climber) -> FALLING (boulder drops from that x) -> done.
+# Boulder: WARNING (danger arrow at the top tracks the TARGET player) ->
+# FALLING (boulder drops on them) -> done.
 #
-# Bottle rain event: SIDE WARNING (danger arrow on a random screen edge) ->
-# RAINING (3-8 bottles hurled in from that edge, staggered over 2 s) -> done.
+# Bottle rain: SIDE WARNING (danger arrow on the target's side of the screen)
+# -> RAINING (3-8 bottles hurled in from that edge, staggered over 2 s) -> done.
 
-# Events stay dormant until any player climbs this high, then one fires
-# every EVENT_DELAY_MIN..MAX seconds (re-rolled after each event), guaranteed.
-const EVENT_START_HEIGHT_M := 15.0
-const EVENT_DELAY_MIN := 5.0
-const EVENT_DELAY_MAX := 15.0
-const PIXELS_PER_METER := 100.0  # same scale as HeightHud
 const WARNING_TIME := 2.5
+const WALL_CENTER_X := 576.0
 
 # Bottle rain tuning.
 const RAIN_MIN_BOTTLES := 3
@@ -32,14 +28,14 @@ const BottleScene := preload("res://Bottle.tscn")
 enum State { IDLE, WARNING, FALLING, RAIN_WARNING, RAINING }
 
 var players: Array = []  # set by Game._ready
-var _timer := 0.0
-var _armed := false      # true once someone has passed EVENT_START_HEIGHT_M
-var _next_in := 0.0      # current rolled delay until the next event
-var _start_y := 0.0      # spawn height baseline for the meter calc
 var _state: State = State.IDLE
 var _state_t := 0.0
 var _arrow: Node2D = null
 var _boulder: RigidBody2D = null
+# The player a running hazard is aimed at.
+var _target: Node2D = null
+# Pending hazards: array of {"kind": "boulder"/"rain", "target": Node2D}.
+var _queue: Array = []
 
 # Bottle rain state: which side ("left"/"right") and the pre-rolled spawn
 # timestamps (seconds into the RAINING state), sorted ascending.
@@ -50,32 +46,38 @@ var _rain_next := 0
 
 func setup(p: Array) -> void:
 	players = p
-	_start_y = p[0].global_position.y
 
+
+# --- Power-up API -----------------------------------------------------------
+
+func trigger_boulder(caster: Node2D) -> void:
+	_queue.append({"kind": "boulder", "target": caster.opponent})
+
+
+func trigger_rain(caster: Node2D) -> void:
+	_queue.append({"kind": "rain", "target": caster.opponent})
+
+
+# ---------------------------------------------------------------------------
 
 func _process(delta: float) -> void:
 	match _state:
 		State.IDLE:
-			if not _armed:
-				if _highest_height_m() >= EVENT_START_HEIGHT_M:
-					_armed = true
-					_next_in = randf_range(EVENT_DELAY_MIN, EVENT_DELAY_MAX)
+			if _queue.is_empty():
 				return
-			# _timer only runs in IDLE, so the rolled delay is measured from
-			# the end of the previous event. Always fires — no chance roll.
-			_timer += delta
-			if _timer >= _next_in:
-				_timer = 0.0
-				_next_in = randf_range(EVENT_DELAY_MIN, EVENT_DELAY_MAX)
-				if randf() < 0.5:
-					_start_boulder_warning()
-				else:
-					_start_rain_warning()
+			var next: Dictionary = _queue.pop_front()
+			_target = next["target"]
+			if _target == null or not is_instance_valid(_target):
+				return
+			if next["kind"] == "boulder":
+				_start_boulder_warning()
+			else:
+				_start_rain_warning()
 		State.WARNING:
 			_state_t += delta
-			# Arrow shadows the highest climber until the drop commits.
-			if _arrow != null:
-				_arrow.global_position.x = _highest_player_x()
+			# Arrow shadows the target until the drop commits.
+			if _arrow != null and is_instance_valid(_target):
+				_arrow.global_position.x = _target.global_position.x
 			if _state_t >= WARNING_TIME:
 				_drop_boulder()
 		State.FALLING:
@@ -99,7 +101,7 @@ func _start_boulder_warning() -> void:
 	_state_t = 0.0
 	_arrow = Node2D.new()
 	_arrow.set_script(DangerArrowScript)
-	_arrow.global_position.x = _highest_player_x()
+	_arrow.global_position.x = _target.global_position.x
 	add_child(_arrow)
 
 
@@ -121,7 +123,8 @@ func _drop_boulder() -> void:
 func _start_rain_warning() -> void:
 	_state = State.RAIN_WARNING
 	_state_t = 0.0
-	_rain_side = "left" if randf() < 0.5 else "right"
+	# Rain comes from the side of the wall the target is on.
+	_rain_side = "left" if _target.global_position.x < WALL_CENTER_X else "right"
 	_arrow = Node2D.new()
 	_arrow.set_script(DangerArrowScript)
 	_arrow.edge = _rain_side
@@ -158,22 +161,3 @@ func _spawn_rain_bottle() -> void:
 	var bottle := BottleScene.instantiate()
 	add_child(bottle)
 	bottle.throw(Vector2(x, y), dir * randf_range(RAIN_SPEED_MIN, RAIN_SPEED_MAX))
-
-
-# Best height above spawn across both players, in meters (HeightHud scale).
-func _highest_height_m() -> float:
-	var best := 0.0
-	for p: Node2D in players:
-		if is_instance_valid(p):
-			best = maxf(best, (_start_y - p.global_position.y) / PIXELS_PER_METER)
-	return best
-
-
-func _highest_player_x() -> float:
-	var best_x := 576.0
-	var best_y := INF
-	for p: Node2D in players:
-		if is_instance_valid(p) and p.global_position.y < best_y:
-			best_y = p.global_position.y
-			best_x = p.global_position.x
-	return best_x

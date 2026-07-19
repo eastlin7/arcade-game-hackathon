@@ -80,7 +80,7 @@ func _rebind_players() -> void:
 func _bind_player(n: int, device: int) -> void:
 	var p := "p%d_" % n
 	for action in [p + "move_up", p + "move_down", p + "move_left",
-			p + "move_right", p + "grab_left", p + "grab_right"]:
+			p + "move_right", p + "grab_left", p + "grab_right", p + "power"]:
 		_clear_joypad_events(action)
 	if device < 0:
 		return
@@ -90,6 +90,7 @@ func _bind_player(n: int, device: int) -> void:
 	_add_axis(p + "move_right", device, JOY_AXIS_LEFT_X, 1.0)
 	_add_button(p + "grab_left", device, 0)   # panel Button 1
 	_add_button(p + "grab_right", device, 1)  # panel Button 2
+	_add_button(p + "power", device, 2)       # panel Button 3 = use power-up
 
 func _clear_joypad_events(action: String) -> void:
 	if not InputMap.has_action(action):

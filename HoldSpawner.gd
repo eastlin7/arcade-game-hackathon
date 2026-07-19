@@ -26,9 +26,9 @@ const LINE_STARTS: Array[float] = [300.0, 850.0]
 const LINE_SALTS: Array[int] = [0x5EED, 0xCAFE]
 
 const HoldScene := preload("res://Hold.tscn")
-const BottleScene := preload("res://Bottle.tscn")
+const PowerBoxScript := preload("res://PowerBox.gd")
 const TetherPointScript := preload("res://TetherPoint.gd")
-const BOTTLE_CHANCE := 0.18  # chance per row a bottle sits on the wall
+const BOX_CHANCE := 0.14  # chance per row a gold power-up box sits on the wall
 # Tether points: one per guide line every TETHER_INTERVAL rows (phase-shifted
 # per line so both players' points don't land on the same row).
 const TETHER_INTERVAL := 7
@@ -128,13 +128,14 @@ func _spawn_row(r: int) -> void:
 			tp.position = Vector2(tx, row_y + rng.randf_range(-JITTER_Y, JITTER_Y))
 			container.add_child(tp)
 
-	# 4. Occasional throwable bottle, parked clear of this row's holds.
-	if rng.randf() < BOTTLE_CHANCE:
+	# 4. Occasional gold power-up box, parked clear of this row's holds.
+	if rng.randf() < BOX_CHANCE:
 		var bx := rng.randf_range(X_MIN, X_MAX)
 		if _clear_of(placed, bx):
-			var bottle := BottleScene.instantiate()
-			bottle.position = Vector2(bx, row_y + rng.randf_range(-JITTER_Y, JITTER_Y))
-			container.add_child(bottle)
+			var box := Node2D.new()
+			box.set_script(PowerBoxScript)
+			box.position = Vector2(bx, row_y + rng.randf_range(-JITTER_Y, JITTER_Y))
+			container.add_child(box)
 
 
 func _clear_of(placed: Array[float], x: float) -> bool:
