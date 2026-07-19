@@ -16,7 +16,10 @@ const WALL_CENTER_X := 576.0
 const RAIN_MIN_BOTTLES := 12
 const RAIN_MAX_BOTTLES := 32
 const RAIN_SPREAD_TIME := 2.0          # bottles staggered across this window
-const RAIN_EDGE_MARGIN := 0.2          # spawn band skips 20% top and bottom
+# Spawn band as fractions of screen height: upper half only, so bottles get
+# a long arc across the screen instead of instantly dropping out the bottom.
+const RAIN_BAND_TOP := 0.08
+const RAIN_BAND_BOTTOM := 0.5
 const RAIN_SPEED_MIN := 560.0
 const RAIN_SPEED_MAX := 760.0
 # Base course tilts upward: fired flat they'd arc down and die early — with
@@ -156,8 +159,8 @@ func _spawn_rain_bottle() -> void:
 		return
 	var half_h := get_viewport_rect().size.y * 0.5 / cam.zoom.y
 	var half_w := get_viewport_rect().size.x * 0.5 / cam.zoom.x
-	var y_span := half_h * 2.0 * (1.0 - 2.0 * RAIN_EDGE_MARGIN)
-	var y := cam.global_position.y - half_h + half_h * 2.0 * RAIN_EDGE_MARGIN + randf() * y_span
+	var top := cam.global_position.y - half_h
+	var y := top + half_h * 2.0 * randf_range(RAIN_BAND_TOP, RAIN_BAND_BOTTOM)
 	var s := 1.0 if _rain_side == "left" else -1.0  # inward x direction
 	var x := cam.global_position.x - s * (half_w + 40.0)
 	# Tilt up (screen up = -y, so rotate against the inward x direction).
